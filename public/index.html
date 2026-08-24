@@ -103,7 +103,7 @@
                 <section class="tab-pane active" id="tab-dashboard">
                     <!-- Top Summary Stats Grid -->
                     <div class="stats-grid">
-                        <div class="stat-card glass-card score-card-container">
+                        <div class="stat-card glass-card score-card-container" id="card-click-score" style="cursor: pointer;">
                             <div class="card-title">MFA Guard Score</div>
                             <div class="score-circle-wrapper">
                                 <svg class="score-svg" viewBox="0 0 100 100">
@@ -118,7 +118,7 @@
                             <div class="score-grade" id="overall-score-grade">Evaluating...</div>
                         </div>
 
-                        <div class="stat-card glass-card border-left-danger">
+                        <div class="stat-card glass-card border-left-danger" id="card-click-critical" style="cursor: pointer;">
                             <div class="stat-header">
                                 <span class="stat-label">Critical Vulnerabilities</span>
                                 <span class="badge badge-danger" id="kpi-critical-count">0</span>
@@ -130,7 +130,7 @@
                             </div>
                         </div>
 
-                        <div class="stat-card glass-card border-left-warning">
+                        <div class="stat-card glass-card border-left-warning" id="card-click-exclusions" style="cursor: pointer;">
                             <div class="stat-header">
                                 <span class="stat-label">Policy Exclusions</span>
                                 <span class="badge badge-warning" id="kpi-exclusions-count">0</span>
@@ -142,7 +142,7 @@
                             </div>
                         </div>
 
-                        <div class="stat-card glass-card border-left-info">
+                        <div class="stat-card glass-card border-left-info" id="card-click-admins" style="cursor: pointer;">
                             <div class="stat-header">
                                 <span class="stat-label">Admin Accounts Risk</span>
                                 <span class="badge badge-info" id="kpi-admins-count">0</span>
@@ -556,6 +556,22 @@ echo "us" | npx wrangler secret put ONELOGIN_REGION</code></pre>
                 </section>
             </div>
         </main>
+    </div>
+
+    <!-- Top Tiles Pop-out Details Modal -->
+    <div class="modal-overlay" id="modal-details-overlay">
+        <div class="modal-card glass-card" style="max-inline-size: 700px;">
+            <div class="modal-header">
+                <h3 id="details-modal-title">Stat Details</h3>
+                <button class="btn-close-modal" id="btn-close-details-modal">✕</button>
+            </div>
+            <div class="modal-body" id="details-modal-body" style="max-block-size: 450px; overflow-y: auto; padding-right: 5px;">
+                <!-- Populated dynamically by JS -->
+            </div>
+            <div class="modal-footer flex-end">
+                <button class="btn btn-secondary" id="btn-close-details-footer">Close Details</button>
+            </div>
+        </div>
     </div>
 
     <!-- Alert Banner Container for dynamic toast notifications -->

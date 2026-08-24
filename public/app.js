@@ -682,4 +682,167 @@ document.addEventListener("DOMContentLoaded", async () => {
             });
         });
     });
+
+    // 9. Stat Cards Click Pop-out Details Modal
+    const detailsModal = document.getElementById("modal-details-overlay");
+    const detailsTitle = document.getElementById("details-modal-title");
+    const detailsBody = document.getElementById("details-modal-body");
+
+    const openDetailsModal = (title, bodyHtml) => {
+        detailsTitle.textContent = title;
+        detailsBody.innerHTML = bodyHtml;
+        detailsModal.classList.add("active");
+    };
+
+    const closeDetailsModal = () => {
+        detailsModal.classList.remove("active");
+    };
+
+    document.getElementById("btn-close-details-modal").addEventListener("click", closeDetailsModal);
+    document.getElementById("btn-close-details-footer").addEventListener("click", closeDetailsModal);
+
+    document.getElementById("card-click-score").addEventListener("click", () => {
+        if (!currentReport) return;
+        const metrics = currentReport.metrics;
+        let html = `
+            <div style="text-align: center; margin-bottom: 1.5rem;">
+                <div style="font-size: 3rem; font-weight: 800; color: var(--success);">${metrics.score}%</div>
+                <div style="font-size: 0.9rem; color: var(--text-secondary);">Current Security Health score</div>
+            </div>
+            <div class="panel-header" style="padding: 0; margin-bottom: 0.75rem;">
+                <h4>MFA Guard Score Audit Rules</h4>
+            </div>
+            <p class="desc-text-sm" style="margin-bottom: 1rem;">The score is derived out of 100 points, applying deductions for every active security gap detected in your tenant configurations:</p>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Rule / Check Case</th>
+                        <th>Deduction</th>
+                        <th>Condition Flag</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td><strong>Disabled CA Policies</strong></td><td style="color:var(--danger)">-15 Points</td><td>Each disabled policy targeting critical roles</td></tr>
+                    <tr><td><strong>Report-Only CA Policies</strong></td><td style="color:var(--warning)">-5 Points</td><td>CA Policies not fully enforced</td></tr>
+                    <tr><td><strong>Unenrolled Admin Accounts</strong></td><td style="color:var(--danger)">-20 Points</td><td>Admin profiles lacking registered MFA</td></tr>
+                    <tr><td><strong>MFA Policy Exclusions</strong></td><td style="color:var(--warning)">-8 Points</td><td>Exemptions granted to security groups</td></tr>
+                    <tr><td><strong>App Passwords Enrolled</strong></td><td style="color:var(--danger)">-5 Points</td><td>Bypasses Conditional Access rules</td></tr>
+                    <tr><td><strong>Legacy Authentication Active</strong></td><td style="color:var(--danger)">-15 Points</td><td>Endpoints like IMAP/POP allowed</td></tr>
+                    <tr><td><strong>Weak MFA Factors</strong></td><td style="color:var(--info)">-3 Points</td><td>SMS/Voice OTP allowed for access</td></tr>
+                </tbody>
+            </table>
+        `;
+        openDetailsModal("MFA Guard Score Breakdown", html);
+    });
+
+    document.getElementById("card-click-critical").addEventListener("click", () => {
+        if (!currentReport) return;
+        const violations = currentReport.violations.filter(v => v.severity === "critical");
+        let html = `
+            <p class="desc-text-sm" style="margin-bottom: 1rem;">Active critical issues that allow authentication bypass without MFA. Fix immediately:</p>
+        `;
+        if (violations.length === 0) {
+            html += `<div class="empty-state">No critical vulnerabilities detected.</div>`;
+        } else {
+            html += `
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Violation</th>
+                            <th>Platform</th>
+                            <th>Threat Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+            violations.forEach(v => {
+                html += `
+                    <tr>
+                        <td><strong>${v.title}</strong></td>
+                        <td><span class="badge badge-danger">${v.platform}</span></td>
+                        <td><p class="desc-text-sm no-margin" style="color:var(--text-secondary)">${v.threat}</p></td>
+                    </tr>
+                `;
+            });
+            html += `</tbody></table>`;
+        }
+        openDetailsModal("Critical Vulnerabilities Detail", html);
+    });
+
+    document.getElementById("card-click-exclusions").addEventListener("click", () => {
+        if (!currentReport) return;
+        const exclusionsList = currentReport.violations.filter(v => 
+            v.title.toLowerCase().includes("exclusion") || 
+            v.title.toLowerCase().includes("bypass") || 
+            v.scope.toLowerCase().includes("exclusion") || 
+            v.scope.toLowerCase().includes("exclude")
+        );
+        let html = `
+            <p class="desc-text-sm" style="margin-bottom: 1rem;">Active rules that exclude accounts, groups, or ranges from MFA checks:</p>
+        `;
+        if (exclusionsList.length === 0) {
+            html += `<div class="empty-state">No active exclusions identified.</div>`;
+        } else {
+            html += `
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Exclusion Detail</th>
+                            <th>Platform</th>
+                            <th>Threat Profile</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+            exclusionsList.forEach(v => {
+                html += `
+                    <tr>
+                        <td><strong>${v.title}</strong></td>
+                        <td><span class="badge badge-warning">${v.platform}</span></td>
+                        <td><p class="desc-text-sm no-margin" style="color:var(--text-secondary)">${v.threat}</p></td>
+                    </tr>
+                `;
+            });
+            html += `</tbody></table>`;
+        }
+        openDetailsModal("MFA Exclusions Audit", html);
+    });
+
+    document.getElementById("card-click-admins").addEventListener("click", () => {
+        if (!currentReport) return;
+        const adminList = currentReport.violations.filter(v => 
+            v.title.toLowerCase().includes("admin") || 
+            v.title.toLowerCase().includes("super") || 
+            v.scope.toLowerCase().includes("admin")
+        );
+        let html = `
+            <p class="desc-text-sm" style="margin-bottom: 1rem;">Identified admin accounts at risk (missing MFA registration or bypassing controls):</p>
+        `;
+        if (adminList.length === 0) {
+            html += `<div class="empty-state">All administrator accounts are secure.</div>`;
+        } else {
+            html += `
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Admin Account Details</th>
+                            <th>Platform</th>
+                            <th>Risk Assessment</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+            adminList.forEach(v => {
+                html += `
+                    <tr>
+                        <td><strong>${v.title}</strong></td>
+                        <td><span class="badge ${v.platform.includes('Entra') ? 'badge-info' : 'badge-warning'}">${v.platform}</span></td>
+                        <td><p class="desc-text-sm no-margin" style="color:var(--text-secondary)">${v.threat}</p></td>
+                    </tr>
+                `;
+            });
+            html += `</tbody></table>`;
+        }
+        openDetailsModal("Admin Accounts Risk Audit", html);
+    });
 });

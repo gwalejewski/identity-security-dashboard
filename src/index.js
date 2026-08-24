@@ -261,7 +261,7 @@ async function scanEntraID(env) {
         });
         if (reportsRes.ok) {
             const reportsData = await reportsRes.json();
-            const rawDetails = reportsData.value || [];
+            const rawDetails = (reportsData.value || []).filter(d => !d.userPrincipalName.includes("#EXT#"));
             users = rawDetails.map(d => {
                 const isMfa = d.isMfaRegistered || d.isMfaCapable || false;
                 const mfaRegistered = isMfa ? "Yes" : "No";
@@ -289,7 +289,7 @@ async function scanEntraID(env) {
         });
         if (usersRes.ok) {
             const usersData = await usersRes.json();
-            const rawDetails = usersData.value || [];
+            const rawDetails = (usersData.value || []).filter(u => !u.userPrincipalName.includes("#EXT#"));
             users = rawDetails.map(u => {
                 let mfaRegistered = "Yes (Assumed)";
                 let severity = "success";

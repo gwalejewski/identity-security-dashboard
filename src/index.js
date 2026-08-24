@@ -255,65 +255,87 @@ async function scanEntraID(env) {
     // 4. Fetch Users (Reports API for bulk tenant compliance, fallback to Users list)
     let users = [];
     try {
-        const reportsUrl = "https://graph.microsoft.com/beta/reports/authenticationMethods/userRegistrationDetails";
-        const reportsRes = await fetch(reportsUrl, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (reportsRes.ok) {
-            const reportsData = await reportsRes.json();
-            const rawDetails = (reportsData.value || []).filter(d => !d.userPrincipalName.includes("#EXT#"));
-            users = rawDetails.map(d => {
-                const isMfa = d.isMfaRegistered || d.isMfaCapable || false;
-                const mfaRegistered = isMfa ? "Yes" : "No";
-                const severity = isMfa ? "success" : "warning";
-                const findings = isMfa ? "MFA registered and active." : "WARNING: Account has no registered security methods.";
-                
-                return {
-                    upn: d.userPrincipalName,
-                    roles: d.userType === "guest" ? "Guest External User" : "Standard Member",
-                    mfaRegistered: mfaRegistered,
-                    mfaEnforced: "Checked via CA",
-                    appPasswords: "No",
-                    findings: findings,
-                    severity: severity
-                };
-            });
-        } else {
-            throw new Error(`Reports API returned status: ${reportsRes.status}`);
-        }
-    } catch (e) {
-        // Fallback to basic Users API list
-        const usersUrl = "https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType";
-        const usersRes = await fetch(usersUrl, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (usersRes.ok) {
-            const usersData = await usersRes.json();
-            const rawDetails = (usersData.value || []).filter(u => !u.userPrincipalName.includes("#EXT#"));
-            users = rawDetails.map(u => {
-                let mfaRegistered = "Yes (Assumed)";
-                let severity = "success";
-                let findings = "MFA registered and active (Assumed). Set Reports.Read.All permissions for exact status.";
-                
-                if (u.userType === "Guest" || u.userPrincipalName.includes("guest") || u.userPrincipalName.includes("contractor")) {
-                    mfaRegistered = "No";
-                    severity = "warning";
-                    findings = "WARNING: Guest accounts are not fully enrolled in tenant-level authentication schemes.";
-                }
+        let reportsUrl = "https://graph.microsoft.com/beta/reports/authenticationMethods/userRegistrationDetails";
+        let rawDetails = [];
+        let pageCount = 0;
 
-                return {
-                    upn: u.userPrincipalName,
-                    roles: u.userType === "Member" ? "Standard Member" : "Guest External User",
-                    mfaRegistered: mfaRegistered,
-                    mfaEnforced: "Checked via CA",
-                    appPasswords: "No",
-                    findings: findings,
-                    severity: severity
-                };
+        while (reportsUrl && pageCount < 50) {
+            const reportsRes = await fetch(reportsUrl, {
+                headers: { 'Authorization': `Bearer ${token}` }
             });
-        } else {
-            throw new Error(`Failed to query users list fallback: ${await usersRes.text()}`);
+            if (reportsRes.ok) {
+                const reportsData = await reportsRes.json();
+                const pageDetails = reportsData.value || [];
+                const filteredPage = pageDetails.filter(d => d.userPrincipalName && !d.userPrincipalName.includes("#EXT#"));
+                rawDetails = rawDetails.concat(filteredPage);
+                
+                reportsUrl = reportsData["@odata.nextLink"] || null;
+                pageCount++;
+            } else {
+                throw new Error(`Reports API returned status: ${reportsRes.status} on page ${pageCount}`);
+            }
         }
+
+        users = rawDetails.map(d => {
+            const isMfa = d.isMfaRegistered || d.isMfaCapable || false;
+            const mfaRegistered = isMfa ? "Yes" : "No";
+            const severity = isMfa ? "success" : "warning";
+            const findings = isMfa ? "MFA registered and active." : "WARNING: Account has no registered security methods.";
+            
+            return {
+                upn: d.userPrincipalName,
+                roles: d.userType === "guest" ? "Guest External User" : "Standard Member",
+                mfaRegistered: mfaRegistered,
+                mfaEnforced: "Checked via CA",
+                appPasswords: "No",
+                findings: findings,
+                severity: severity
+            };
+        });
+    } catch (e) {
+        // Fallback to basic Users API list with pagination support
+        let usersUrl = "https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType";
+        let rawDetails = [];
+        let pageCount = 0;
+
+        while (usersUrl && pageCount < 50) {
+            const usersRes = await fetch(usersUrl, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (usersRes.ok) {
+                const usersData = await usersRes.json();
+                const pageDetails = usersData.value || [];
+                const filteredPage = pageDetails.filter(u => u.userPrincipalName && !u.userPrincipalName.includes("#EXT#"));
+                rawDetails = rawDetails.concat(filteredPage);
+                
+                usersUrl = usersData["@odata.nextLink"] || null;
+                pageCount++;
+            } else {
+                throw new Error(`Failed to query users list fallback on page ${pageCount}: ${await usersRes.text()}`);
+            }
+        }
+
+        users = rawDetails.map(u => {
+            let mfaRegistered = "Yes (Assumed)";
+            let severity = "success";
+            let findings = "MFA registered and active (Assumed). Set Reports.Read.All permissions for exact status.";
+            
+            if (u.userType === "Guest" || u.userPrincipalName.includes("guest") || u.userPrincipalName.includes("contractor")) {
+                mfaRegistered = "No";
+                severity = "warning";
+                findings = "WARNING: Guest accounts are not fully enrolled in tenant-level authentication schemes.";
+            }
+
+            return {
+                upn: u.userPrincipalName,
+                roles: u.userType === "Member" ? "Standard Member" : "Guest External User",
+                mfaRegistered: mfaRegistered,
+                mfaEnforced: "Checked via CA",
+                appPasswords: "No",
+                findings: findings,
+                severity: severity
+            };
+        });
     }
 
     const settings = [
@@ -392,17 +414,31 @@ async function scanOneLogin(env) {
         }
     ];
 
-    // 3. Fetch Users
-    const usersUrl = `https://api.${region}.onelogin.com/api/2/users`;
-    const usersRes = await fetch(usersUrl, {
-        headers: { 'Authorization': `Bearer ${token}` }
-    });
-
+    // 3. Fetch Users with cursor-based pagination
     let rawUsers = [];
-    if (usersRes.ok) {
-        rawUsers = await usersRes.json();
-    } else {
-        throw new Error(`OneLogin users query failed: ${await usersRes.text()}`);
+    let usersUrl = `https://api.${region}.onelogin.com/api/2/users?limit=100`;
+    let cursor = null;
+    let pageCount = 0;
+
+    while (usersUrl && pageCount < 50) {
+        const fetchUrl = cursor ? `${usersUrl}&cursor=${cursor}` : usersUrl;
+        const usersRes = await fetch(fetchUrl, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (usersRes.ok) {
+            const pageUsers = await usersRes.json();
+            rawUsers = rawUsers.concat(pageUsers);
+            
+            // Get After-Cursor header
+            cursor = usersRes.headers.get("After-Cursor") || null;
+            if (!cursor || pageUsers.length === 0) {
+                break;
+            }
+            pageCount++;
+        } else {
+            throw new Error(`OneLogin users query failed on page ${pageCount}: ${await usersRes.text()}`);
+        }
     }
 
     // Query OneLogin registered OTP devices for first 15 users in parallel

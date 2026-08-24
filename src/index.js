@@ -779,7 +779,8 @@ async function getOneLoginUserMfa(env, email, token = null) {
                 });
                 if (devRes.ok) {
                     const devices = await devRes.json();
-                    return devices && devices.length > 0;
+                    const list = (devices.data && devices.data.otp_devices) || [];
+                    return list.length > 0;
                 }
             }
         }
@@ -943,13 +944,15 @@ async function scanOneLogin(env, refresh = false) {
         await Promise.all(olPromises);
 
         users = rawUsers.map(u => {
-            const hasMfa = u.otp_devices && u.otp_devices.length > 0;
+            const devObj = u.otp_devices || {};
+            const devList = (devObj.data && devObj.data.otp_devices) || [];
+            const hasMfa = devList.length > 0;
             let mfaDevicesVal = "None Enrolled";
             let bypassRiskVal = "CRITICAL: MFA required but user has not completed device enrollment.";
             let severityVal = "critical";
 
             if (hasMfa) {
-                mfaDevicesVal = `${u.otp_devices.length} Registered Device(s)`;
+                mfaDevicesVal = `${devList.length} Registered Device(s)`;
                 bypassRiskVal = "Low Risk: User profile has enrolled authentication factors.";
                 severityVal = "success";
             } else if (u.otp_devices === undefined) {
@@ -1209,6 +1212,87 @@ export default {
                     "Access-Control-Allow-Headers": "Content-Type, Authorization"
                 }
             });
+        }
+
+        if (url.pathname === "/api/debug-groups") {
+            try {
+                const tokenUrl = `https://login.microsoftonline.com/${env.ENTRA_TENANT_ID}/oauth2/v2.0/token`;
+                const tokenParams = new URLSearchParams({
+                    grant_type: 'client_credentials',
+                    client_id: env.ENTRA_CLIENT_ID,
+                    client_secret: env.ENTRA_CLIENT_SECRET,
+                    scope: 'https://graph.microsoft.com/.default'
+                });
+                const tokenRes = await fetch(tokenUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: tokenParams.toString()
+                });
+                const tokenData = await tokenRes.json();
+                const token = tokenData.access_token;
+
+                const res = await fetch("https://graph.microsoft.com/beta/groups?$search=\"displayName:unfederated\"&$count=true&$select=id,displayName", {
+                    headers: { 
+                        'Authorization': `Bearer ${token}`,
+                        'ConsistencyLevel': 'eventual'
+                    }
+                });
+                const data = await res.json();
+                return new Response(JSON.stringify(data), {
+                    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+                });
+            } catch (e) {
+                return new Response(JSON.stringify({ error: e.message }), {
+                    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+                });
+            }
+        }
+
+        if (url.pathname === "/api/debug-user") {
+            try {
+                const email = url.searchParams.get("email") || "BAXDORFF@steelcase.com";
+                const hasMfa = await getOneLoginUserMfa(env, email);
+                
+                const region = env.ONELOGIN_REGION || "us";
+                const tokenUrl = `https://api.${region}.onelogin.com/auth/oauth2/v2/token`;
+                const tokenRes = await fetch(tokenUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `client_id:${env.ONELOGIN_CLIENT_ID}, client_secret:${env.ONELOGIN_CLIENT_SECRET}`
+                    },
+                    body: JSON.stringify({ grant_type: "client_credentials" })
+                });
+                const tokenData = await tokenRes.json();
+                const token = tokenData.access_token;
+                
+                const userUrl = `https://api.${region}.onelogin.com/api/2/users?email=${encodeURIComponent(email)}`;
+                const userRes = await fetch(userUrl, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const userObj = await userRes.json();
+                
+                let devices = null;
+                if (userObj && userObj.length > 0) {
+                    const devUrl = `https://api.${region}.onelogin.com/api/1/users/${userObj[0].id}/otp_devices`;
+                    const devRes = await fetch(devUrl, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    devices = await devRes.json();
+                }
+                
+                return new Response(JSON.stringify({
+                    hasMfa,
+                    user: userObj,
+                    devices
+                }), {
+                    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+                });
+            } catch (e) {
+                return new Response(JSON.stringify({ error: e.message }), {
+                    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+                });
+            }
         }
 
         // Endpoint for scanning configurations

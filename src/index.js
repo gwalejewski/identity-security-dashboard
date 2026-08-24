@@ -170,6 +170,19 @@ const SANDBOX_DATA = {
     }
 };
 
+// Helper to check if a user has not logged in for 30 days or never logged in
+function isInactiveUser(lastLoginStr) {
+    if (!lastLoginStr) return true; // Exclude if they have never logged in
+    try {
+        const lastLogin = new Date(lastLoginStr);
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        return lastLogin < thirtyDaysAgo;
+    } catch (e) {
+        return false; // Safe fallback: don't exclude on parse errors
+    }
+}
+
 // Helper to check if a surname is empty or a common placeholder
 function isDummySurname(surname) {
     if (!surname) return true;
@@ -374,7 +387,7 @@ async function scanEntraID(env, refresh = false) {
         const excludedUPNs = new Set();
         let rawUsers = [];
         try {
-            let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,companyName,onPremisesDistinguishedName,${scsAttrName}&$top=999`;
+            let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,companyName,signInActivity,onPremisesDistinguishedName,${scsAttrName}&$top=999`;
             let pageCount = 0;
             while (usersUrl && pageCount < 15) {
                 const res = await fetch(usersUrl, { headers: { 'Authorization': `Bearer ${token}` } });
@@ -391,6 +404,8 @@ async function scanEntraID(env, refresh = false) {
             metadataWarning = `Entra ID Metadata Query Failed: ${err.message}`;
         }
 
+        const hasSignInActivityPermission = rawUsers.some(u => u.signInActivity && u.signInActivity.lastSignInDateTime);
+
         if (rawUsers.length > 0) {
             rawUsers.forEach(u => {
                 if (u.userPrincipalName) {
@@ -400,9 +415,14 @@ async function scanEntraID(env, refresh = false) {
                     const company = (u.companyName || "").trim().toLowerCase();
                     const hasValidCompany = company === "steelcase inc." || company === "hni";
                     
+                    const signInActivity = u.signInActivity || {};
+                    const lastSignIn = signInActivity.lastSignInDateTime;
+                    const isInactive = hasSignInActivityPermission ? isInactiveUser(lastSignIn) : false;
+                    
                     const shouldExclude = hasSCSAffiliationCodeADM(u) || 
                         !hasSurname ||
                         !hasValidCompany ||
+                        isInactive ||
                         dn.includes("service account") || 
                         dn.includes("service-account") || 
                         dn.includes("services accounts") || 
@@ -519,7 +539,7 @@ async function scanEntraID(env, refresh = false) {
             let fallbackUsers = [];
             let pageCount = 0;
             try {
-                let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,companyName,onPremisesDistinguishedName,${scsAttrName}&$top=999`;
+                let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,companyName,signInActivity,onPremisesDistinguishedName,${scsAttrName}&$top=999`;
                 while (usersUrl && pageCount < 15) {
                     const usersRes = await fetch(usersUrl, { headers: { 'Authorization': `Bearer ${token}` } });
                     if (usersRes.ok) {
@@ -536,6 +556,8 @@ async function scanEntraID(env, refresh = false) {
             }
 
             if (fallbackUsers.length > 0) {
+                const hasFallbackSignInActivity = fallbackUsers.some(u => u.signInActivity && u.signInActivity.lastSignInDateTime);
+
                 const filteredPage = fallbackUsers.filter(u => {
                     if (!u.userPrincipalName) return false;
                     const upn = u.userPrincipalName.toLowerCase();
@@ -546,11 +568,15 @@ async function scanEntraID(env, refresh = false) {
                     const company = (u.companyName || "").trim().toLowerCase();
                     const hasValidCompany = company === "steelcase inc." || company === "hni";
                     
+                    const signInActivity = u.signInActivity || {};
+                    const lastSignIn = signInActivity.lastSignInDateTime;
+                    const isInactive = hasFallbackSignInActivity ? isInactiveUser(lastSignIn) : false;
+                    
                     // Exclude guest account types
                     if (upn.includes("#ext#") || userType === "guest" || upn.includes("guest") || displayName.includes("guest")) return false;
                     
-                    // Exclude if missing last name or invalid company name
-                    if (!hasSurname || !hasValidCompany) return false;
+                    // Exclude if missing last name, invalid company name, or inactive
+                    if (!hasSurname || !hasValidCompany || isInactive) return false;
                     
                     // Exclude service accounts (including DN OU check)
                     if (upn.startsWith("svc") || upn.startsWith("sa-") || upn.startsWith("sa_") || upn.includes("service") || upn.includes("serviceaccount") || displayName.includes("service account") || displayName.includes("svc-") || 
@@ -745,6 +771,8 @@ async function scanOneLogin(env, refresh = false) {
 
             if (usersRes.ok) {
                 const pageUsers = await usersRes.json();
+                const hasOneLoginLoginData = pageUsers.some(u => u.last_login);
+
                 const filteredPage = pageUsers.filter(u => {
                     const email = (u.email || "").toLowerCase();
                     const username = (u.username || "").toLowerCase();
@@ -754,15 +782,17 @@ async function scanOneLogin(env, refresh = false) {
                     const company = (u.company || "").trim().toLowerCase();
                     const hasValidCompany = company === "steelcase inc." || company === "hni";
                     
+                    const isInactive = hasOneLoginLoginData ? isInactiveUser(u.last_login) : false;
+                    
                     // Exclude guest account types
                     if (email.includes("guest") || username.includes("guest") || name.includes("guest")) {
                         return false;
                     }
 
-                    // Exclude if missing last name, manager, or invalid company
+                    // Exclude if missing last name, manager, invalid company, or inactive
                     const hasLastName = u.lastname && String(u.lastname).trim().length > 0;
                     const hasManager = (u.manager_user_id !== null && u.manager_user_id !== undefined && u.manager_user_id !== "") || (u.manager_ad_id !== null && u.manager_ad_id !== undefined && u.manager_ad_id !== "");
-                    if (!hasLastName || !hasManager || !hasValidCompany) {
+                    if (!hasLastName || !hasManager || !hasValidCompany || isInactive) {
                         return false;
                     }
                     

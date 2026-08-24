@@ -439,7 +439,7 @@ async function scanEntraID(env, refresh = false) {
         try {
             let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,companyName,signInActivity,onPremisesDistinguishedName,${scsAttrName}&$top=999`;
             let pageCount = 0;
-            while (usersUrl && pageCount < 15) {
+            while (usersUrl && pageCount < 10) {
                 const res = await fetch(usersUrl, { headers: { 'Authorization': `Bearer ${token}` } });
                 if (res.ok) {
                     const data = await res.json();
@@ -498,7 +498,7 @@ async function scanEntraID(env, refresh = false) {
             let reportsUrl = "https://graph.microsoft.com/beta/reports/authenticationMethods/userRegistrationDetails?$top=999";
             let pageCount = 0;
 
-            while (reportsUrl && pageCount < 15) {
+            while (reportsUrl && pageCount < 10) {
                 const reportsRes = await fetch(reportsUrl, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
@@ -590,7 +590,7 @@ async function scanEntraID(env, refresh = false) {
             let pageCount = 0;
             try {
                 let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,companyName,signInActivity,onPremisesDistinguishedName,${scsAttrName}&$top=999`;
-                while (usersUrl && pageCount < 15) {
+                while (usersUrl && pageCount < 10) {
                     const usersRes = await fetch(usersUrl, { headers: { 'Authorization': `Bearer ${token}` } });
                     if (usersRes.ok) {
                         const usersData = await usersRes.json();
@@ -876,7 +876,7 @@ async function scanOneLogin(env, refresh = false) {
         let cursor = null;
         let pageCount = 0;
 
-        while (usersUrl && pageCount < 3) {
+        while (usersUrl && pageCount < 2) {
             const fetchUrl = cursor ? `${usersUrl}&cursor=${cursor}` : usersUrl;
             const usersRes = await fetch(fetchUrl, {
                 headers: { 'Authorization': `Bearer ${token}` }
@@ -1314,82 +1314,80 @@ export default {
 
                 // Gather candidates for individual OneLogin verification (federated, missing MFA in Entra, and not matched in bulk OneLogin list and not already resolved in cache)
                 // ONLY execute candidate dynamic lookups on standard cached loads to stay within subrequest limits
-                if (!refresh) {
-                    const candidates = scanOutput.entra.users.filter(u => {
-                        if (!u.upn) return false;
-                        const upn = u.upn.toLowerCase();
-                        const isFederated = !unfedSet.has(upn);
-                        return isFederated && u.mfaRegistered === "No" && !oneloginMfaUsers.has(upn) && olMfaCache[upn] === undefined;
-                    });
+                const candidates = scanOutput.entra.users.filter(u => {
+                    if (!u.upn) return false;
+                    const upn = u.upn.toLowerCase();
+                    const isFederated = !unfedSet.has(upn);
+                    return isFederated && u.mfaRegistered === "No" && !oneloginMfaUsers.has(upn) && olMfaCache[upn] === undefined;
+                });
 
-                    // Prioritize baxdorff if present in candidates to ensure it is scanned immediately
-                    candidates.sort((a, b) => {
-                        const aB = a.upn.toLowerCase().includes("baxdorff");
-                        const bB = b.upn.toLowerCase().includes("baxdorff");
-                        if (aB && !bB) return -1;
-                        if (!aB && bB) return 1;
-                        return a.upn.localeCompare(b.upn);
-                    });
+                // Prioritize baxdorff if present in candidates to ensure it is scanned immediately
+                candidates.sort((a, b) => {
+                    const aB = a.upn.toLowerCase().includes("baxdorff");
+                    const bB = b.upn.toLowerCase().includes("baxdorff");
+                    if (aB && !bB) return -1;
+                    if (!aB && bB) return 1;
+                    return a.upn.localeCompare(b.upn);
+                });
 
-                    scanOutput.warnings.push(`Candidates count for dynamic OL audit (uncached): ${candidates.length}`);
-                    const hasBaxdorffCandidate = candidates.some(c => c.upn.toLowerCase().includes("baxdorff"));
-                    scanOutput.warnings.push(`Is BAXDORFF a candidate: ${hasBaxdorffCandidate}`);
+                scanOutput.warnings.push(`Candidates count for dynamic OL audit (uncached): ${candidates.length}`);
+                const hasBaxdorffCandidate = candidates.some(c => c.upn.toLowerCase().includes("baxdorff"));
+                scanOutput.warnings.push(`Is BAXDORFF a candidate: ${hasBaxdorffCandidate}`);
 
-                    const limit = 3;
-                    const candidatesToCheck = candidates.slice(0, limit);
+                const limit = 3;
+                const candidatesToCheck = candidates.slice(0, limit);
 
-                    if (candidatesToCheck.length > 0 && env.ONELOGIN_CLIENT_ID && env.ONELOGIN_CLIENT_SECRET) {
-                        let olToken = scanOutput.onelogin ? scanOutput.onelogin.token : null;
-                        if (!olToken) {
-                            try {
-                                const region = env.ONELOGIN_REGION || "us";
-                                const tokenUrl = `https://api.${region}.onelogin.com/auth/oauth2/v2/token`;
-                                const tokenRes = await fetch(tokenUrl, {
-                                    method: 'POST',
-                                    headers: {
-                                        'Content-Type': 'application/json',
-                                        'Authorization': `client_id:${env.ONELOGIN_CLIENT_ID}, client_secret:${env.ONELOGIN_CLIENT_SECRET}`
-                                    },
-                                    body: JSON.stringify({ grant_type: "client_credentials" })
-                                });
-                                if (tokenRes.ok) {
-                                    const tokenData = await tokenRes.json();
-                                    olToken = tokenData.access_token;
-                                } else {
-                                    scanOutput.warnings.push(`OL Token request failed: ${tokenRes.status}`);
-                                }
-                            } catch (e) {
-                                scanOutput.warnings.push(`OL Token error: ${e.message}`);
-                            }
-                        }
-
-                        scanOutput.warnings.push(`OL Token acquired successfully: ${olToken ? "Yes" : "No"}`);
-
-                        if (olToken) {
-                            let cacheUpdated = false;
-                            const promises = candidatesToCheck.map(async (u) => {
-                                const upn = u.upn.toLowerCase();
-                                try {
-                                    const hasMfaInOL = await getOneLoginUserMfa(env, upn, null, scanOutput.warnings);
-                                    olMfaCache[upn] = hasMfaInOL;
-                                    cacheUpdated = true;
-                                    if (u.upn.toLowerCase().includes("baxdorff")) {
-                                        scanOutput.warnings.push(`BAXDORFF dynamic OL MFA result: ${hasMfaInOL}`);
-                                    }
-                                    if (hasMfaInOL) {
-                                        u.mfaRegistered = "Yes (OneLogin SSO)";
-                                        u.findings = "Compliant: MFA managed and enforced via OneLogin federation.";
-                                        u.severity = "success";
-                                    }
-                                } catch (err) {}
+                if (candidatesToCheck.length > 0 && env.ONELOGIN_CLIENT_ID && env.ONELOGIN_CLIENT_SECRET) {
+                    let olToken = scanOutput.onelogin ? scanOutput.onelogin.token : null;
+                    if (!olToken) {
+                        try {
+                            const region = env.ONELOGIN_REGION || "us";
+                            const tokenUrl = `https://api.${region}.onelogin.com/auth/oauth2/v2/token`;
+                            const tokenRes = await fetch(tokenUrl, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `client_id:${env.ONELOGIN_CLIENT_ID}, client_secret:${env.ONELOGIN_CLIENT_SECRET}`
+                                },
+                                body: JSON.stringify({ grant_type: "client_credentials" })
                             });
-                            await Promise.all(promises);
-
-                            if (cacheUpdated && env.GUARDRAIL_DB) {
-                                try {
-                                    await env.GUARDRAIL_DB.put("onelogin_mfa_cache", JSON.stringify(olMfaCache));
-                                } catch (e) {}
+                            if (tokenRes.ok) {
+                                const tokenData = await tokenRes.json();
+                                olToken = tokenData.access_token;
+                            } else {
+                                scanOutput.warnings.push(`OL Token request failed: ${tokenRes.status}`);
                             }
+                        } catch (e) {
+                            scanOutput.warnings.push(`OL Token error: ${e.message}`);
+                        }
+                    }
+
+                    scanOutput.warnings.push(`OL Token acquired successfully: ${olToken ? "Yes" : "No"}`);
+
+                    if (olToken) {
+                        let cacheUpdated = false;
+                        const promises = candidatesToCheck.map(async (u) => {
+                            const upn = u.upn.toLowerCase();
+                            try {
+                                const hasMfaInOL = await getOneLoginUserMfa(env, upn, olToken, scanOutput.warnings);
+                                olMfaCache[upn] = hasMfaInOL;
+                                cacheUpdated = true;
+                                if (u.upn.toLowerCase().includes("baxdorff")) {
+                                    scanOutput.warnings.push(`BAXDORFF dynamic OL MFA result: ${hasMfaInOL}`);
+                                }
+                                if (hasMfaInOL) {
+                                    u.mfaRegistered = "Yes (OneLogin SSO)";
+                                    u.findings = "Compliant: MFA managed and enforced via OneLogin federation.";
+                                    u.severity = "success";
+                                }
+                            } catch (err) {}
+                        });
+                        await Promise.all(promises);
+
+                        if (cacheUpdated && env.GUARDRAIL_DB) {
+                            try {
+                                await env.GUARDRAIL_DB.put("onelogin_mfa_cache", JSON.stringify(olMfaCache));
+                            } catch (e) {}
                         }
                     }
                 }

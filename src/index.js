@@ -229,6 +229,47 @@ async function resolveSCSAffiliationAttribute(token) {
     return scsAttrName;
 }
 
+// Helper to batch query manager status for specific users
+async function checkManagersForUsers(token, upns) {
+    const hasManagerMap = {};
+    const upnList = Array.from(upns);
+    
+    for (let i = 0; i < upnList.length; i += 20) {
+        const batch = upnList.slice(i, i + 20);
+        const requests = batch.map((upn, idx) => ({
+            id: String(idx + 1),
+            method: "GET",
+            url: `/users/${encodeURIComponent(upn)}/manager?$select=id`
+        }));
+        
+        try {
+            const res = await fetch("https://graph.microsoft.com/beta/$batch", {
+                method: "POST",
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ requests })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                (data.responses || []).forEach(r => {
+                    const reqIndex = Number(r.id) - 1;
+                    const upn = batch[reqIndex];
+                    if (r.status === 200) {
+                        hasManagerMap[upn] = true;
+                    } else {
+                        hasManagerMap[upn] = false;
+                    }
+                });
+            }
+        } catch (e) {
+            // Ignore and fallback
+        }
+    }
+    return hasManagerMap;
+}
+
 // Authenticate and fetch Microsoft Entra ID assets
 async function scanEntraID(env, refresh = false) {
     if (!env.ENTRA_TENANT_ID || !env.ENTRA_CLIENT_ID || !env.ENTRA_CLIENT_SECRET) {
@@ -329,11 +370,11 @@ async function scanEntraID(env, refresh = false) {
     if (!isCached) {
         const scsAttrName = await resolveSCSAffiliationAttribute(token);
 
-        // Query users metadata first to find ADM affiliation codes
+        // 1. Bulk Users Metadata Query (no expand, fast, supports $top=999)
         const excludedUPNs = new Set();
         let rawUsers = [];
         try {
-            let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$expand=manager($select=id)&$top=999`;
+            let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$top=999`;
             let pageCount = 0;
             while (usersUrl && pageCount < 15) {
                 const res = await fetch(usersUrl, { headers: { 'Authorization': `Bearer ${token}` } });
@@ -347,42 +388,7 @@ async function scanEntraID(env, refresh = false) {
                 }
             }
         } catch (err) {
-            try {
-                let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$expand=manager&$top=999`;
-                let pageCount = 0;
-                rawUsers = [];
-                while (usersUrl && pageCount < 15) {
-                    const res = await fetch(usersUrl, { headers: { 'Authorization': `Bearer ${token}` } });
-                    if (res.ok) {
-                        const data = await res.json();
-                        rawUsers = rawUsers.concat(data.value || []);
-                        usersUrl = data["@odata.nextLink"] || null;
-                        pageCount++;
-                    } else {
-                        throw new Error(`Graph status ${res.status}`);
-                    }
-                }
-            } catch (err2) {
-                try {
-                    let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$top=999`;
-                    let pageCount = 0;
-                    rawUsers = [];
-                    while (usersUrl && pageCount < 15) {
-                        const res = await fetch(usersUrl, { headers: { 'Authorization': `Bearer ${token}` } });
-                        if (res.ok) {
-                            const data = await res.json();
-                            rawUsers = rawUsers.concat(data.value || []);
-                            usersUrl = data["@odata.nextLink"] || null;
-                            pageCount++;
-                        } else {
-                            throw new Error(`Graph status ${res.status}`);
-                        }
-                    }
-                    metadataWarning = `Entra ID: Manager filtering disabled due to Graph API permission constraints (${err2.message}). Filtering by last name only.`;
-                } catch (err3) {
-                    metadataWarning = `Entra ID Metadata Query Failed: ${err3.message}`;
-                }
-            }
+            metadataWarning = `Entra ID Metadata Query Failed: ${err.message}`;
         }
 
         if (rawUsers.length > 0) {
@@ -391,14 +397,9 @@ async function scanEntraID(env, refresh = false) {
                     const upn = u.userPrincipalName.toLowerCase();
                     const dn = (u.onPremisesDistinguishedName || "").toLowerCase();
                     const hasSurname = u.surname && !isDummySurname(u.surname);
-                    // Evaluate manager status depending on whether we succeeded in expanding it
-                    const hasManager = u.manager ? !!u.manager.id || Object.keys(u.manager).length > 0 : false;
                     
-                    // If metadata query succeeded but manager expansion was skipped, bypass manager check to prevent false exclusions
-                    const skipManagerFilter = metadataWarning && metadataWarning.includes("Manager filtering disabled");
                     const shouldExclude = hasSCSAffiliationCodeADM(u) || 
                         !hasSurname ||
-                        (!hasManager && !skipManagerFilter) ||
                         dn.includes("service account") || 
                         dn.includes("service-account") || 
                         dn.includes("services accounts") || 
@@ -418,9 +419,10 @@ async function scanEntraID(env, refresh = false) {
 
         const activeUPNs = new Set(rawUsers.map(u => u.userPrincipalName ? u.userPrincipalName.toLowerCase() : ""));
 
+        // 2. Query reports list details
+        let rawDetails = [];
         try {
             let reportsUrl = "https://graph.microsoft.com/beta/reports/authenticationMethods/userRegistrationDetails?$top=999";
-            let rawDetails = [];
             let pageCount = 0;
 
             while (reportsUrl && pageCount < 15) {
@@ -468,6 +470,21 @@ async function scanEntraID(env, refresh = false) {
                 isCapped = true;
             }
 
+            // 3. Identify and batch check manager status ONLY for the users who are missing MFA
+            const missingMfaUPNs = rawDetails
+                .filter(d => !(d.isMfaRegistered || d.isMfaCapable))
+                .map(d => d.userPrincipalName.toLowerCase());
+
+            let managerMap = {};
+            if (missingMfaUPNs.length > 0) {
+                try {
+                    managerMap = await checkManagersForUsers(token, missingMfaUPNs);
+                } catch (err) {
+                    metadataWarning = `Entra ID Manager Check Failed: ${err.message}`;
+                }
+            }
+
+            // 4. Map to final user records, excluding MFA-missing users without a manager
             users = rawDetails.map(d => {
                 const isMfa = d.isMfaRegistered || d.isMfaCapable || false;
                 const mfaRegistered = isMfa ? "Yes" : "No";
@@ -483,17 +500,28 @@ async function scanEntraID(env, refresh = false) {
                     findings: findings,
                     severity: severity
                 };
+            }).filter(u => {
+                if (u.mfaRegistered === "No") {
+                    const upn = u.upn.toLowerCase();
+                    // If they have no manager, exclude them from the report list
+                    if (managerMap[upn] === false) {
+                        return false;
+                    }
+                }
+                return true;
             });
+
         } catch (e) {
-            let rawDetails = [];
+            // Fallback scan path (uses basic users query if reports scan fails completely)
+            let fallbackUsers = [];
             let pageCount = 0;
             try {
-                let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$expand=manager($select=id)&$top=999`;
+                let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$top=999`;
                 while (usersUrl && pageCount < 15) {
                     const usersRes = await fetch(usersUrl, { headers: { 'Authorization': `Bearer ${token}` } });
                     if (usersRes.ok) {
                         const usersData = await usersRes.json();
-                        rawDetails = rawDetails.concat(usersData.value || []);
+                        fallbackUsers = fallbackUsers.concat(usersData.value || []);
                         usersUrl = usersData["@odata.nextLink"] || null;
                         pageCount++;
                     } else {
@@ -501,60 +529,23 @@ async function scanEntraID(env, refresh = false) {
                     }
                 }
             } catch (err) {
-                try {
-                    let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$expand=manager&$top=999`;
-                    rawDetails = [];
-                    pageCount = 0;
-                    while (usersUrl && pageCount < 15) {
-                        const usersRes = await fetch(usersUrl, { headers: { 'Authorization': `Bearer ${token}` } });
-                        if (usersRes.ok) {
-                            const usersData = await usersRes.json();
-                            rawDetails = rawDetails.concat(usersData.value || []);
-                            usersUrl = usersData["@odata.nextLink"] || null;
-                            pageCount++;
-                        } else {
-                            throw new Error(`Graph status ${usersRes.status}`);
-                        }
-                    }
-                } catch (err2) {
-                    try {
-                        let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$top=999`;
-                        rawDetails = [];
-                        pageCount = 0;
-                        while (usersUrl && pageCount < 15) {
-                            const usersRes = await fetch(usersUrl, { headers: { 'Authorization': `Bearer ${token}` } });
-                            if (usersRes.ok) {
-                                const usersData = await usersRes.json();
-                                rawDetails = rawDetails.concat(usersData.value || []);
-                                usersUrl = usersData["@odata.nextLink"] || null;
-                                pageCount++;
-                            } else {
-                                throw new Error(`Graph status ${usersRes.status}`);
-                            }
-                        }
-                        metadataWarning = `Entra ID Fallback: Manager filtering disabled due to Graph API permission constraints (${err2.message}).`;
-                    } catch (err3) {
-                        metadataWarning = `Entra ID Fallback Scan Failed: ${err3.message}`;
-                    }
-                }
+                metadataWarning = `Entra ID Fallback Scan Failed: ${err.message}`;
             }
 
-            if (rawDetails.length > 0) {
-                const filteredPage = rawDetails.filter(u => {
+            if (fallbackUsers.length > 0) {
+                const filteredPage = fallbackUsers.filter(u => {
                     if (!u.userPrincipalName) return false;
                     const upn = u.userPrincipalName.toLowerCase();
                     const displayName = (u.displayName || "").toLowerCase();
                     const userType = (u.userType || "").toLowerCase();
                     const dn = (u.onPremisesDistinguishedName || "").toLowerCase();
                     const hasSurname = u.surname && !isDummySurname(u.surname);
-                    const hasManager = u.manager ? !!u.manager.id || Object.keys(u.manager).length > 0 : false;
                     
                     // Exclude guest account types
                     if (upn.includes("#ext#") || userType === "guest" || upn.includes("guest") || displayName.includes("guest")) return false;
                     
-                    // Exclude if missing last name or manager
-                    const skipManagerFilter = metadataWarning && metadataWarning.includes("Manager filtering disabled");
-                    if (!hasSurname || (!hasManager && !skipManagerFilter)) return false;
+                    // Exclude if missing last name
+                    if (!hasSurname) return false;
                     
                     // Exclude service accounts (including DN OU check)
                     if (upn.startsWith("svc") || upn.startsWith("sa-") || upn.startsWith("sa_") || upn.includes("service") || upn.includes("serviceaccount") || displayName.includes("service account") || displayName.includes("svc-") || 
@@ -570,24 +561,31 @@ async function scanEntraID(env, refresh = false) {
                     }
                     return true;
                 });
-                rawDetails = filteredPage;
-            }
 
-            users = rawDetails.map(u => {
-                let mfaRegistered = "Yes (Assumed)";
-                let severity = "success";
-                let findings = "MFA registered and active (Assumed). Set Reports.Read.All permissions for exact status.";
-                
-                return {
-                    upn: u.userPrincipalName,
-                    roles: u.userType === "Member" ? "Standard Member" : "Guest External User",
-                    mfaRegistered: mfaRegistered,
-                    mfaEnforced: "Checked via CA",
-                    appPasswords: "No",
-                    findings: findings,
-                    severity: severity
-                };
-            });
+                // Check managers only for filtered fallback users (fallback assumes MFA is missing for all unless checked)
+                const missingUPNs = filteredPage.map(u => u.userPrincipalName.toLowerCase());
+                let fallbackManagerMap = {};
+                if (missingUPNs.length > 0) {
+                    try {
+                        fallbackManagerMap = await checkManagersForUsers(token, missingUPNs);
+                    } catch (err) {}
+                }
+
+                users = filteredPage.filter(u => {
+                    const upn = u.userPrincipalName.toLowerCase();
+                    return fallbackManagerMap[upn] !== false;
+                }).map(u => {
+                    return {
+                        upn: u.userPrincipalName,
+                        roles: u.userType === "Member" ? "Standard Member" : "Guest External User",
+                        mfaRegistered: "No", // Fallback assumes missing MFA
+                        mfaEnforced: "Checked via CA",
+                        appPasswords: "No",
+                        findings: "WARNING: Account has no registered security methods.",
+                        severity: "warning"
+                    };
+                });
+            }
         }
 
         // Save back to KV Database Cache if enabled

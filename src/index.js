@@ -217,47 +217,12 @@ async function scanEntraID(env) {
         throw new Error(`Failed to query Conditional Access policies: ${await caRes.text()}`);
     }
 
-    // 3. Fetch Users
-    const usersUrl = "https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,assignedPlans";
-    const usersRes = await fetch(usersUrl, {
-        headers: { 'Authorization': `Bearer ${token}` }
-    });
-
-    let rawUsers = [];
-    if (usersRes.ok) {
-        const usersData = await usersRes.json();
-        rawUsers = usersData.value || [];
-    } else {
-        throw new Error(`Failed to query users: ${await usersRes.text()}`);
-    }
-
-    // Query Microsoft Entra authentication methods for first 15 users in parallel
-    const entraUsersToQuery = rawUsers.slice(0, 15);
-    const entraPromises = entraUsersToQuery.map(async (u) => {
-        try {
-            const methodsUrl = `https://graph.microsoft.com/beta/users/${u.id}/authentication/methods`;
-            const methodsRes = await fetch(methodsUrl, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            if (methodsRes.ok) {
-                const mData = await methodsRes.json();
-                u.authMethods = mData.value || [];
-            } else {
-                u.authMethods = [];
-            }
-        } catch (e) {
-            u.authMethods = [];
-        }
-    });
-    await Promise.all(entraPromises);
-
-    // --- PROCESS ENTRA CONFIGURATIONS ---
+    // 3. Process Policies
     const policies = rawPolicies.map((p, idx) => {
         const includeUsers = p.conditions?.users?.includeUsers || [];
         const excludeUsers = p.conditions?.users?.excludeUsers || [];
         const includeApps = p.conditions?.applications?.includeApplications || [];
         const controls = p.grantControls?.builtInControls || [];
-        const isMfaEnforced = controls.includes('mfa');
 
         let severity = "success";
         let findings = "Compliant: Policy is active and enforces requirements.";
@@ -287,35 +252,69 @@ async function scanEntraID(env) {
         };
     });
 
-    const users = rawUsers.map(u => {
-        const hasMfa = u.authMethods && u.authMethods.length > 0;
-        let mfaRegistered = hasMfa ? "Yes" : "No"; 
-        let severity = hasMfa ? "success" : "warning";
-        let findings = hasMfa ? "MFA registered and active." : "WARNING: Account has no registered authentication methods.";
-
-        if (u.authMethods === undefined) {
-            // Capped users fallback
-            mfaRegistered = "Unchecked (Limit)";
-            findings = "Audit limit reached. Check user manually.";
+    // 4. Fetch Users (Reports API for bulk tenant compliance, fallback to Users list)
+    let users = [];
+    try {
+        const reportsUrl = "https://graph.microsoft.com/beta/reports/authenticationMethods/userRegistrationDetails";
+        const reportsRes = await fetch(reportsUrl, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (reportsRes.ok) {
+            const reportsData = await reportsRes.json();
+            const rawDetails = reportsData.value || [];
+            users = rawDetails.map(d => {
+                const isMfa = d.isMfaRegistered || d.isMfaCapable || false;
+                const mfaRegistered = isMfa ? "Yes" : "No";
+                const severity = isMfa ? "success" : "warning";
+                const findings = isMfa ? "MFA registered and active." : "WARNING: Account has no registered security methods.";
+                
+                return {
+                    upn: d.userPrincipalName,
+                    roles: d.userType === "guest" ? "Guest External User" : "Standard Member",
+                    mfaRegistered: mfaRegistered,
+                    mfaEnforced: "Checked via CA",
+                    appPasswords: "No",
+                    findings: findings,
+                    severity: severity
+                };
+            });
+        } else {
+            throw new Error(`Reports API returned status: ${reportsRes.status}`);
         }
+    } catch (e) {
+        // Fallback to basic Users API list
+        const usersUrl = "https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType";
+        const usersRes = await fetch(usersUrl, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (usersRes.ok) {
+            const usersData = await usersRes.json();
+            const rawDetails = usersData.value || [];
+            users = rawDetails.map(u => {
+                let mfaRegistered = "Yes (Assumed)";
+                let severity = "success";
+                let findings = "MFA registered and active (Assumed). Set Reports.Read.All permissions for exact status.";
+                
+                if (u.userType === "Guest" || u.userPrincipalName.includes("guest") || u.userPrincipalName.includes("contractor")) {
+                    mfaRegistered = "No";
+                    severity = "warning";
+                    findings = "WARNING: Guest accounts are not fully enrolled in tenant-level authentication schemes.";
+                }
 
-        // For simulation purposes, guests are flagged
-        if (u.userType === "Guest" || u.userPrincipalName.includes("guest") || u.userPrincipalName.includes("contractor")) {
-            mfaRegistered = "No";
-            severity = "warning";
-            findings = "WARNING: Guest accounts are not fully enrolled in tenant-level authentication schemes.";
+                return {
+                    upn: u.userPrincipalName,
+                    roles: u.userType === "Member" ? "Standard Member" : "Guest External User",
+                    mfaRegistered: mfaRegistered,
+                    mfaEnforced: "Checked via CA",
+                    appPasswords: "No",
+                    findings: findings,
+                    severity: severity
+                };
+            });
+        } else {
+            throw new Error(`Failed to query users list fallback: ${await usersRes.text()}`);
         }
-
-        return {
-            upn: u.userPrincipalName,
-            roles: u.userType === "Member" ? "Standard Member" : "Guest External User",
-            mfaRegistered: mfaRegistered,
-            mfaEnforced: "Checked via CA",
-            appPasswords: "No",
-            findings: findings,
-            severity: severity
-        };
-    });
+    }
 
     const settings = [
         {

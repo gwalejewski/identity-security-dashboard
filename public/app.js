@@ -10,6 +10,120 @@ let currentReport = null;
 let currentFilter = 'all';
 let selectedRemediationId = null;
 
+// Map of configured remediation guides
+const REMEDIATION_STEPS = {
+    "entra-ca-1": {
+        title: "Enable MFA Policy for Admin Roles",
+        platform: "Microsoft Entra ID",
+        desc: "The critical Conditional Access policy 'Require MFA for High-Privilege Roles' is disabled. High-privilege directories are vulnerable to brute-force and credential stuffing.",
+        steps: [
+            "Navigate to the Microsoft Entra admin center (https://entra.microsoft.com).",
+            "Go to Protection > Conditional Access > Policies.",
+            "Select 'Require MFA for High-Privilege Roles'.",
+            "Under 'Enable policy', switch the toggle from 'Off' or 'Report-only' to 'On'.",
+            "Ensure that you do not accidentally lock yourself out. Exclude your current admin account temporarily if you have not registered MFA yet, verify access, and then remove the exclusion."
+        ],
+        codeLang: "PowerShell (Microsoft Graph CLI)",
+        code: `# Enable the CA Policy\nUpdate-MgBetaIdentityConditionalAccessPolicy \\\n    -ConditionalAccessPolicyId "ca-policy-uuid-here" \\\n    -State "enabled"`
+    },
+    "entra-ca-2": {
+        title: "Review Guest MFA Exclusion Groups",
+        platform: "Microsoft Entra ID",
+        desc: "Guest policy contains broad exclusions. Accounts in 'External Contractors Bypass' are allowed single-factor authentication.",
+        steps: [
+            "Identify all users currently assigned to the group 'External Contractors Bypass'.",
+            "Remove active users from this group who should be prompted for MFA.",
+            "For contractors that cannot configure standard phone-based MFA, enforce Cross-Tenant Access Settings to trust MFA configurations from their home directory, or require FIDO2 keys."
+        ],
+        codeLang: "PowerShell (Graph CLI)",
+        code: `# Retrieve members of the exclusion group to audit\nGet-MgBetaGroupMember -GroupId "exclusion-group-uuid-here" | \\\n    Select-Object Id, UPN, DisplayName`
+    },
+    "entra-ca-4": {
+        title: "Enforce Standard User base MFA Policy",
+        platform: "Microsoft Entra ID",
+        desc: "CA Policy for standard users is set to 'Report-only'. Report-only logs the authentication result but does not prompt for MFA challenges.",
+        steps: [
+            "Go to Protection > Conditional Access > Policies.",
+            "Select 'MFA for Standard User Base'.",
+            "Review sign-in logs to evaluate user impact (ensure most users have registered factors).",
+            "Change the state of the policy to 'On'."
+        ],
+        codeLang: "PowerShell",
+        code: `# Enforce Report-Only policy to Enabled\nUpdate-MgBetaIdentityConditionalAccessPolicy \\\n    -ConditionalAccessPolicyId "standard-policy-uuid" \\\n    -State "enabled"`
+    },
+    "dwight-admin": {
+        title: "Enforce MFA and Revoke App Passwords for Dwight Schrute",
+        platform: "Microsoft Entra ID",
+        desc: "Dwight Schrute is a Global Admin without MFA registered and has active app passwords that bypass authentication policies.",
+        steps: [
+            "Force MFA registration: In Microsoft Entra Admin Center, go to Users > Active Users > Select Dwight > MFA settings, and enforce MFA registration.",
+            "Disable App Passwords: Go to Security > Multifactor Authentication > Additional cloud-based MFA settings. Clear the 'Allow users to create app passwords to sign in to non-browser apps' checkbox.",
+            "Revoke existing app passwords: Go to Dwight's user profile page and select 'Revoke MFA sessions' and delete all app passwords."
+        ],
+        codeLang: "PowerShell",
+        code: `# Revoke all active user sign-in sessions\nRevoke-MgBetaUserSignInSession -UserId "dwight-user-uuid"\n\n# Audit user's authentication methods\nGet-MgBetaUserAuthenticationMethod -UserId "dwight-user-uuid"`
+    },
+    "entra-settings-legacy": {
+        title: "Block Legacy Authentication Protocols",
+        platform: "Microsoft Entra ID",
+        desc: "Legacy protocols (IMAP, POP3, SMTP, MAPI) do not support MFA challenges. Attackers target these endpoints to bypass policies.",
+        steps: [
+            "In Entra admin center, go to Protection > Conditional Access > Policies.",
+            "Create a new policy named 'Block Legacy Authentication'.",
+            "Under 'Users', select 'All Users'.",
+            "Under 'Cloud apps', select 'All cloud apps'.",
+            "Under 'Conditions' > 'Client apps', configure 'Configure' to 'Yes'.",
+            "Check 'Exchange ActiveSync clients' and 'Other clients' (POP, IMAP, SMTP, etc.).",
+            "Under 'Grant', select 'Block access'.",
+            "Save and enable the policy."
+        ],
+        codeLang: "PowerShell CLI",
+        code: `# Create CA Policy to block legacy authentication client apps\n$conditions = @{\n    Applications = @{ IncludeApplications = @('All') }\n    Users = @{ IncludeUsers = @('All') }\n    ClientAppTypes = @('ExchangeActiveSync', 'Other')\n}\n$grantControls = @{\n    BuiltInControls = @('block')\n    Operator = 'OR'\n}\nNew-MgBetaIdentityConditionalAccessPolicy \\\n    -DisplayName "Block Legacy Auth Protocols" \\\n    -State "enabled" \\\n    -Conditions $conditions \\\n    -GrantControls $grantControls`
+    },
+    "ol-policy-1": {
+        title: "Enforce MFA in OneLogin User Policies",
+        platform: "OneLogin",
+        desc: "The default Employee Policy permits optional MFA, allowing users to authenticate with passwords only.",
+        steps: [
+            "Log in to the OneLogin Admin portal.",
+            "Navigate to Security > Policies and select 'Standard Employee Security Policy'.",
+            "Select the 'MFA' tab.",
+            "Set 'OTP Enrolled' to 'Required' (instead of Optional).",
+            "Configure 'MFA Device Registration' to 'Prompt user on login until registered'."
+        ],
+        codeLang: "OneLogin REST API (cURL)",
+        code: `curl -X PUT "https://api.us.onelogin.com/api/2/policies/policy-id-1" \\\n  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "mfa": {\n      "otp_enforced": "required",\n      "otp_registration": "mandatory"\n    }\n  }'`
+    },
+    "ol-policy-2": {
+        title: "Disable HQ LAN MFA Bypass for Admins",
+        platform: "OneLogin",
+        desc: "Admin login policy bypasses MFA for the 'Corporate HQ LAN' IP range. Remote workers and compromised local networks can exploit this bypass.",
+        steps: [
+            "In OneLogin portal, navigate to Security > Policies > Administrator Login Policy.",
+            "Go to the 'MFA' tab.",
+            "Under 'MFA Bypass', locate the IP range bypass setting.",
+            "Remove 'Corporate HQ LAN' from the exception range or set bypass to 'None'.",
+            "Save the policy."
+        ],
+        codeLang: "OneLogin REST API (cURL)",
+        code: `curl -X PUT "https://api.us.onelogin.com/api/2/policies/policy-id-2" \\\n  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "mfa": {\n      "trusted_network_bypass": "none"\n    }\n  }'`
+    },
+    "michael-ol-admin": {
+        title: "Force MFA Registration for Michael Scott",
+        platform: "OneLogin",
+        desc: "Super User Michael Scott has no registered MFA devices. Any credential leak allows instant bypass of MFA.",
+        steps: [
+            "In OneLogin portal, select Users > Users.",
+            "Search for and select 'Michael Scott'.",
+            "Click on the 'Authentication' tab.",
+            "Click 'Send Invitation' to force OTP registration, or click 'Reset MFA' to prompt on next login.",
+            "Contact the user to verify registration of a secure device (like OneLogin Protect)."
+        ],
+        codeLang: "OneLogin REST API (cURL)",
+        code: `# Trigger MFA reset / registration prompt for user-id\ncurl -X PUT "https://api.us.onelogin.com/api/2/users/michael-user-id/otp_devices" \\\n  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \\\n  -d '{"action": "reset"}'`
+    }
+};
+
 // ==========================================================================
 // FETCH COMPLIANCE REPORT FROM WORKER BACKEND
 // ==========================================================================
@@ -320,120 +434,6 @@ function buildRemediationMenu(violations) {
         return;
     }
 
-    // Map of configured remediation guides from app.js
-    const REMEDIATION_STEPS = {
-        "entra-ca-1": {
-            title: "Enable MFA Policy for Admin Roles",
-            platform: "Microsoft Entra ID",
-            desc: "The critical Conditional Access policy 'Require MFA for High-Privilege Roles' is disabled. High-privilege directories are vulnerable to brute-force and credential stuffing.",
-            steps: [
-                "Navigate to the Microsoft Entra admin center (https://entra.microsoft.com).",
-                "Go to Protection > Conditional Access > Policies.",
-                "Select 'Require MFA for High-Privilege Roles'.",
-                "Under 'Enable policy', switch the toggle from 'Off' or 'Report-only' to 'On'.",
-                "Ensure that you do not accidentally lock yourself out. Exclude your current admin account temporarily if you have not registered MFA yet, verify access, and then remove the exclusion."
-            ],
-            codeLang: "PowerShell (Microsoft Graph CLI)",
-            code: `# Enable the CA Policy\nUpdate-MgBetaIdentityConditionalAccessPolicy \\\n    -ConditionalAccessPolicyId "ca-policy-uuid-here" \\\n    -State "enabled"`
-        },
-        "entra-ca-2": {
-            title: "Review Guest MFA Exclusion Groups",
-            platform: "Microsoft Entra ID",
-            desc: "Guest policy contains broad exclusions. Accounts in 'External Contractors Bypass' are allowed single-factor authentication.",
-            steps: [
-                "Identify all users currently assigned to the group 'External Contractors Bypass'.",
-                "Remove active users from this group who should be prompted for MFA.",
-                "For contractors that cannot configure standard phone-based MFA, enforce Cross-Tenant Access Settings to trust MFA configurations from their home directory, or require FIDO2 keys."
-            ],
-            codeLang: "PowerShell (Graph CLI)",
-            code: `# Retrieve members of the exclusion group to audit\nGet-MgBetaGroupMember -GroupId "exclusion-group-uuid-here" | \\\n    Select-Object Id, UPN, DisplayName`
-        },
-        "entra-ca-4": {
-            title: "Enforce Standard User base MFA Policy",
-            platform: "Microsoft Entra ID",
-            desc: "CA Policy for standard users is set to 'Report-only'. Report-only logs the authentication result but does not prompt for MFA challenges.",
-            steps: [
-                "Go to Protection > Conditional Access > Policies.",
-                "Select 'MFA for Standard User Base'.",
-                "Review sign-in logs to evaluate user impact (ensure most users have registered factors).",
-                "Change the state of the policy to 'On'."
-            ],
-            codeLang: "PowerShell",
-            code: `# Enforce Report-Only policy to Enabled\nUpdate-MgBetaIdentityConditionalAccessPolicy \\\n    -ConditionalAccessPolicyId "standard-policy-uuid" \\\n    -State "enabled"`
-        },
-        "dwight-admin": {
-            title: "Enforce MFA and Revoke App Passwords for Dwight Schrute",
-            platform: "Microsoft Entra ID",
-            desc: "Dwight Schrute is a Global Admin without MFA registered and has active app passwords that bypass authentication policies.",
-            steps: [
-                "Force MFA registration: In Microsoft Entra Admin Center, go to Users > Active Users > Select Dwight > MFA settings, and enforce MFA registration.",
-                "Disable App Passwords: Go to Security > Multifactor Authentication > Additional cloud-based MFA settings. Clear the 'Allow users to create app passwords to sign in to non-browser apps' checkbox.",
-                "Revoke existing app passwords: Go to Dwight's user profile page and select 'Revoke MFA sessions' and delete all app passwords."
-            ],
-            codeLang: "PowerShell",
-            code: `# Revoke all active user sign-in sessions\nRevoke-MgBetaUserSignInSession -UserId "dwight-user-uuid"\n\n# Audit user's authentication methods\nGet-MgBetaUserAuthenticationMethod -UserId "dwight-user-uuid"`
-        },
-        "entra-settings-legacy": {
-            title: "Block Legacy Authentication Protocols",
-            platform: "Microsoft Entra ID",
-            desc: "Legacy protocols (IMAP, POP3, SMTP, MAPI) do not support MFA challenges. Attackers target these endpoints to bypass policies.",
-            steps: [
-                "In Entra admin center, go to Protection > Conditional Access > Policies.",
-                "Create a new policy named 'Block Legacy Authentication'.",
-                "Under 'Users', select 'All Users'.",
-                "Under 'Cloud apps', select 'All cloud apps'.",
-                "Under 'Conditions' > 'Client apps', configure 'Configure' to 'Yes'.",
-                "Check 'Exchange ActiveSync clients' and 'Other clients' (POP, IMAP, SMTP, etc.).",
-                "Under 'Grant', select 'Block access'.",
-                "Save and enable the policy."
-            ],
-            codeLang: "PowerShell CLI",
-            code: `# Create CA Policy to block legacy authentication client apps\n$conditions = @{\n    Applications = @{ IncludeApplications = @('All') }\n    Users = @{ IncludeUsers = @('All') }\n    ClientAppTypes = @('ExchangeActiveSync', 'Other')\n}\n$grantControls = @{\n    BuiltInControls = @('block')\n    Operator = 'OR'\n}\nNew-MgBetaIdentityConditionalAccessPolicy \\\n    -DisplayName "Block Legacy Auth Protocols" \\\n    -State "enabled" \\\n    -Conditions $conditions \\\n    -GrantControls $grantControls`
-        },
-        "ol-policy-1": {
-            title: "Enforce MFA in OneLogin User Policies",
-            platform: "OneLogin",
-            desc: "The default Employee Policy permits optional MFA, allowing users to authenticate with passwords only.",
-            steps: [
-                "Log in to the OneLogin Admin portal.",
-                "Navigate to Security > Policies and select 'Standard Employee Security Policy'.",
-                "Select the 'MFA' tab.",
-                "Set 'OTP Enrolled' to 'Required' (instead of Optional).",
-                "Configure 'MFA Device Registration' to 'Prompt user on login until registered'."
-            ],
-            codeLang: "OneLogin REST API (cURL)",
-            code: `curl -X PUT "https://api.us.onelogin.com/api/2/policies/policy-id-1" \\\n  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "mfa": {\n      "otp_enforced": "required",\n      "otp_registration": "mandatory"\n    }\n  }'`
-        },
-        "ol-policy-2": {
-            title: "Disable HQ LAN MFA Bypass for Admins",
-            platform: "OneLogin",
-            desc: "Admin login policy bypasses MFA for the 'Corporate HQ LAN' IP range. Remote workers and compromised local networks can exploit this bypass.",
-            steps: [
-                "In OneLogin portal, navigate to Security > Policies > Administrator Login Policy.",
-                "Go to the 'MFA' tab.",
-                "Under 'MFA Bypass', locate the IP range bypass setting.",
-                "Remove 'Corporate HQ LAN' from the exception range or set bypass to 'None'.",
-                "Save the policy."
-            ],
-            codeLang: "OneLogin REST API (cURL)",
-            code: `curl -X PUT "https://api.us.onelogin.com/api/2/policies/policy-id-2" \\\n  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "mfa": {\n      "trusted_network_bypass": "none"\n    }\n  }'`
-        },
-        "michael-ol-admin": {
-            title: "Force MFA Registration for Michael Scott",
-            platform: "OneLogin",
-            desc: "Super User Michael Scott has no registered MFA devices. Any credential leak allows instant bypass of MFA.",
-            steps: [
-                "In OneLogin portal, select Users > Users.",
-                "Search for and select 'Michael Scott'.",
-                "Click on the 'Authentication' tab.",
-                "Click 'Send Invitation' to force OTP registration, or click 'Reset MFA' to prompt on next login.",
-                "Contact the user to verify registration of a secure device (like OneLogin Protect)."
-            ],
-            codeLang: "OneLogin REST API (cURL)",
-            code: `# Trigger MFA reset / registration prompt for user-id\ncurl -X PUT "https://api.us.onelogin.com/api/2/users/michael-user-id/otp_devices" \\\n  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \\\n  -d '{"action": "reset"}'`
-        }
-    };
-
     violations.forEach(v => {
         const item = document.createElement("button");
         item.className = "remediation-menu-item";
@@ -452,7 +452,7 @@ function buildRemediationMenu(violations) {
             selectedRemediationId = v.id;
             document.querySelectorAll(".remediation-menu-item").forEach(btn => btn.classList.remove("active"));
             item.classList.add("active");
-            renderRemediationDetail(v.id, REMEDIATION_STEPS);
+            renderRemediationDetail(v.id);
         });
         list.appendChild(item);
     });
@@ -463,24 +463,62 @@ function buildRemediationMenu(violations) {
         const firstItem = list.querySelector(".remediation-menu-item");
         if (firstItem) {
             firstItem.classList.add("active");
-            renderRemediationDetail(violations[0].id, REMEDIATION_STEPS);
+            renderRemediationDetail(violations[0].id);
         }
     }
 }
 
-function renderRemediationDetail(id, stepDatabase) {
+function renderRemediationDetail(id) {
     const panel = document.getElementById("remediation-detail-panel");
-    // Find guide by id, or match partial user name keys
-    let stepData = stepDatabase[id];
-    if (!stepData && id.includes("dwight")) stepData = stepDatabase["dwight-admin"];
-    if (!stepData && id.includes("michael")) stepData = stepDatabase["michael-ol-admin"];
+    let stepData = REMEDIATION_STEPS[id];
+    
+    // Attempt fuzzy matches for common names/admin references
+    if (!stepData && id.includes("dwight")) stepData = REMEDIATION_STEPS["dwight-admin"];
+    if (!stepData && id.includes("michael")) stepData = REMEDIATION_STEPS["michael-ol-admin"];
+    if (!stepData && id.includes("legacy")) stepData = REMEDIATION_STEPS["entra-settings-legacy"];
+
+    // Dynamic fallback builder to guarantee it is NEVER blank for live APIs
+    if (!stepData && currentReport && currentReport.violations) {
+        const violation = currentReport.violations.find(v => v.id === id);
+        if (violation) {
+            const isEntra = violation.platform.toLowerCase().includes("entra") || violation.platform.toLowerCase().includes("microsoft");
+            const manualSteps = isEntra ? [
+                "Open the Microsoft Entra admin center (https://entra.microsoft.com).",
+                "Navigate to Identity > Protection > Conditional Access > Policies (or Identity > Users depending on finding context).",
+                `Auditing finding target scope: '${violation.scope}'.`,
+                "Examine why this configuration bypasses MFA (e.g. check for disabled states, report-only policy switches, or insecure exclusions).",
+                "Configure the policy status to 'On' and click Save.",
+                "Select 'Re-Scan Active APIs' on this dashboard to verify compliance."
+            ] : [
+                "Log in to your OneLogin Admin Portal.",
+                "Navigate to Security > Policies (or Users > Users depending on finding context).",
+                `Auditing finding target scope: '${violation.scope}'.`,
+                "Check the MFA tab: ensure OTP Enrollment is set to 'Required' and that 'trusted network bypasses' are disabled or securely scoped.",
+                "Save changes and run a fresh scan on this dashboard to confirm the gap is closed."
+            ];
+
+            const codeLangVal = isEntra ? "PowerShell (Graph Beta)" : "REST API (cURL)";
+            const codeSnippet = isEntra ? 
+                `# Connect to Graph API with admin permissions\nConnect-MgGraph -Scopes "Policy.ReadWrite.ConditionalAccess"\n\n# Audit or modify the policy settings\nGet-MgBetaIdentityConditionalAccessPolicy -ConditionalAccessPolicyId "${id}"` :
+                `# Query specific user profile settings to inspect bypass risk\ncurl -X GET "https://api.us.onelogin.com/api/2/users?query=${encodeURIComponent(violation.scope)}" \\\n  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"`;
+
+            stepData = {
+                title: `Enforce MFA: ${violation.title}`,
+                platform: violation.platform,
+                desc: violation.threat,
+                steps: manualSteps,
+                codeLang: codeLangVal,
+                code: codeSnippet
+            };
+        }
+    }
 
     if (!stepData) {
         panel.innerHTML = `
             <div class="empty-state">
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"/></svg>
-                <h3>No Details Configured</h3>
-                <p>Specific automated remediation guides are unavailable for this custom vector.</p>
+                <h3>Remediation Guide Pending</h3>
+                <p>Ensure that a live environment scan has been triggered to fetch finding details.</p>
             </div>
         `;
         return;
@@ -490,7 +528,7 @@ function renderRemediationDetail(id, stepDatabase) {
 
     panel.innerHTML = `
         <div class="remediation-details">
-            <span class="badge ${stepData.platform.includes('Entra') ? 'badge-info' : 'badge-warning'}" style="margin-bottom: 0.5rem;">${stepData.platform}</span>
+            <span class="badge ${stepData.platform.toLowerCase().includes('entra') || stepData.platform.toLowerCase().includes('microsoft') ? 'badge-info' : 'badge-warning'}" style="margin-bottom: 0.5rem;">${stepData.platform}</span>
             <h3>${stepData.title}</h3>
             <p class="issue-desc">${stepData.desc}</p>
 

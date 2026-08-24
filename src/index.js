@@ -254,12 +254,13 @@ async function scanEntraID(env) {
 
     // 4. Fetch Users (Reports API for bulk tenant compliance, fallback to Users list)
     let users = [];
+    let isCapped = false;
     try {
         let reportsUrl = "https://graph.microsoft.com/beta/reports/authenticationMethods/userRegistrationDetails";
         let rawDetails = [];
         let pageCount = 0;
 
-        while (reportsUrl && pageCount < 50) {
+        while (reportsUrl && pageCount < 15) {
             const reportsRes = await fetch(reportsUrl, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
@@ -274,6 +275,10 @@ async function scanEntraID(env) {
             } else {
                 throw new Error(`Reports API returned status: ${reportsRes.status} on page ${pageCount}`);
             }
+        }
+
+        if (reportsUrl) {
+            isCapped = true;
         }
 
         users = rawDetails.map(d => {
@@ -298,7 +303,7 @@ async function scanEntraID(env) {
         let rawDetails = [];
         let pageCount = 0;
 
-        while (usersUrl && pageCount < 50) {
+        while (usersUrl && pageCount < 15) {
             const usersRes = await fetch(usersUrl, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
@@ -313,6 +318,10 @@ async function scanEntraID(env) {
             } else {
                 throw new Error(`Failed to query users list fallback on page ${pageCount}: ${await usersRes.text()}`);
             }
+        }
+
+        if (usersUrl) {
+            isCapped = true;
         }
 
         users = rawDetails.map(u => {
@@ -362,7 +371,8 @@ async function scanEntraID(env) {
         timestamp: new Date().toISOString(),
         policies,
         users,
-        settings
+        settings,
+        warning: isCapped ? "Microsoft Entra ID user scan capped at 1,500 users due to Cloudflare subrequest limits." : null
     };
 }
 
@@ -419,8 +429,9 @@ async function scanOneLogin(env) {
     let usersUrl = `https://api.${region}.onelogin.com/api/2/users?limit=100`;
     let cursor = null;
     let pageCount = 0;
+    let isCapped = false;
 
-    while (usersUrl && pageCount < 50) {
+    while (usersUrl && pageCount < 15) {
         const fetchUrl = cursor ? `${usersUrl}&cursor=${cursor}` : usersUrl;
         const usersRes = await fetch(fetchUrl, {
             headers: { 'Authorization': `Bearer ${token}` }
@@ -441,8 +452,17 @@ async function scanOneLogin(env) {
         }
     }
 
-    // Query OneLogin registered OTP devices for first 15 users in parallel
-    const olUsersToQuery = rawUsers.slice(0, 15);
+    if (cursor) {
+        isCapped = true;
+    }
+
+    // Query OneLogin registered OTP devices ONLY for the first 5 administrators to stay within subrequest limits
+    const olAdmins = rawUsers.filter(u => {
+        const usernameLower = (u.username || u.email || "").toLowerCase();
+        return usernameLower.includes("admin") || usernameLower.includes("super") || u.role_id === 1;
+    });
+    const olUsersToQuery = olAdmins.length > 0 ? olAdmins.slice(0, 5) : rawUsers.slice(0, 5);
+
     const olPromises = olUsersToQuery.map(async (u) => {
         try {
             const devUrl = `https://api.${region}.onelogin.com/api/1/users/${u.id}/otp_devices`;
@@ -491,7 +511,8 @@ async function scanOneLogin(env) {
         subdomain: env.ONELOGIN_SUBDOMAIN,
         timestamp: new Date().toISOString(),
         policies,
-        users
+        users,
+        warning: isCapped ? "OneLogin user scan capped at 1,500 users due to Cloudflare subrequest limits." : null
     };
 }
 
@@ -711,6 +732,9 @@ export default {
             // 1. Audit Entra ID (Catch and fallback to sandbox)
             try {
                 scanOutput.entra = await scanEntraID(env);
+                if (scanOutput.entra && scanOutput.entra.warning) {
+                    scanOutput.warnings.push(scanOutput.entra.warning);
+                }
             } catch (err) {
                 scanOutput.warnings.push(`Entra ID Scan: ${err.message}`);
                 scanOutput.entra = SANDBOX_DATA.entra;
@@ -720,6 +744,9 @@ export default {
             // 2. Audit OneLogin (Catch and fallback to sandbox)
             try {
                 scanOutput.onelogin = await scanOneLogin(env);
+                if (scanOutput.onelogin && scanOutput.onelogin.warning) {
+                    scanOutput.warnings.push(scanOutput.onelogin.warning);
+                }
             } catch (err) {
                 scanOutput.warnings.push(`OneLogin Scan: ${err.message}`);
                 scanOutput.onelogin = SANDBOX_DATA.onelogin;

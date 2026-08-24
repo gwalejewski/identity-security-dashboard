@@ -366,8 +366,10 @@ async function scanEntraID(env, refresh = false) {
                         if (!d.userPrincipalName) return false;
                         const upn = d.userPrincipalName.toLowerCase();
                         const displayName = (d.displayName || "").toLowerCase();
+                        const userType = (d.userType || "").toLowerCase();
                         
-                        if (upn.includes("#ext#")) return false;
+                        // Exclude guest account types
+                        if (upn.includes("#ext#") || userType === "guest" || upn.includes("guest") || displayName.includes("guest")) return false;
                         
                         // Exclude service accounts
                         if (upn.startsWith("svc") || upn.startsWith("sa-") || upn.startsWith("sa_") || upn.includes("service") || upn.includes("serviceaccount") || displayName.includes("service account") || displayName.includes("svc-")) {
@@ -426,8 +428,10 @@ async function scanEntraID(env, refresh = false) {
                         if (!u.userPrincipalName) return false;
                         const upn = u.userPrincipalName.toLowerCase();
                         const displayName = (u.displayName || "").toLowerCase();
+                        const userType = (u.userType || "").toLowerCase();
                         
-                        if (upn.includes("#ext#")) return false;
+                        // Exclude guest account types
+                        if (upn.includes("#ext#") || userType === "guest" || upn.includes("guest") || displayName.includes("guest")) return false;
                         
                         // Exclude service accounts
                         if (upn.startsWith("svc") || upn.startsWith("sa-") || upn.startsWith("sa_") || upn.includes("service") || upn.includes("serviceaccount") || displayName.includes("service account") || displayName.includes("svc-")) {
@@ -614,6 +618,11 @@ async function scanOneLogin(env, refresh = false) {
                     const firstname = (u.firstname || "").toLowerCase();
                     const lastname = (u.lastname || "").toLowerCase();
                     const name = `${firstname} ${lastname}`;
+                    
+                    // Exclude guest account types
+                    if (email.includes("guest") || username.includes("guest") || name.includes("guest")) {
+                        return false;
+                    }
                     
                     if (email.startsWith("svc") || email.startsWith("sa-") || email.startsWith("sa_") || email.includes("service") || email.includes("serviceaccount") ||
                         username.startsWith("svc") || username.startsWith("sa-") || username.startsWith("sa_") || username.includes("service") || username.includes("serviceaccount") ||

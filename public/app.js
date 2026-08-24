@@ -249,8 +249,8 @@ function renderUI() {
     // 3. Render Chart Donuts
     const totalSecuredPct = metrics.totalUsers > 0 ? Math.round((metrics.mfaEnrolledUsers / metrics.totalUsers) * 100) : 0;
     document.getElementById("donut-enrolled-pct").textContent = `${totalSecuredPct}%`;
-    document.getElementById("lbl-leg-enrolled").textContent = metrics.mfaEnrolledUsers;
-    document.getElementById("lbl-leg-missing").textContent = metrics.totalUsers - metrics.mfaEnrolledUsers;
+    document.getElementById("lbl-leg-enrolled").textContent = `${metrics.mfaEnrolledUsers} / ${metrics.totalUsers}`;
+    document.getElementById("lbl-leg-missing").textContent = `${metrics.totalUsers - metrics.mfaEnrolledUsers} / ${metrics.totalUsers}`;
 
     const donutCircumference = 2 * Math.PI * 35; // r=35
     const enrolledSeg = document.getElementById("donut-segment-enrolled");

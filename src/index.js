@@ -416,6 +416,8 @@ async function scanEntraID(env, refresh = false) {
             });
         }
 
+        const activeUPNs = new Set(rawUsers.map(u => u.userPrincipalName ? u.userPrincipalName.toLowerCase() : ""));
+
         try {
             let reportsUrl = "https://graph.microsoft.com/beta/reports/authenticationMethods/userRegistrationDetails?$top=999";
             let rawDetails = [];
@@ -433,6 +435,11 @@ async function scanEntraID(env, refresh = false) {
                         const upn = d.userPrincipalName.toLowerCase();
                         const displayName = (d.displayName || "").toLowerCase();
                         const userType = (d.userType || "").toLowerCase();
+                        
+                        // Exclude if not present in the active users list (orphaned/deleted accounts in report)
+                        if (rawUsers.length > 0 && !activeUPNs.has(upn)) {
+                            return false;
+                        }
                         
                         // Exclude guest account types
                         if (upn.includes("#ext#") || userType === "guest" || upn.includes("guest") || displayName.includes("guest")) return false;

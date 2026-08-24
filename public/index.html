@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Identity MFA Security Dashboard - Audit Entra ID and OneLogin tenants to find MFA bypasses, disabled security policies, and unenrolled high-privilege users.">
+    <title>GuardRail - Cloudflare Identity MFA Security Dashboard</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- Main Stylesheet -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="dark-theme">
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar" id="app-sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" stroke="url(#logo-grad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M12 6V12L16 14" stroke="url(#logo-grad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        <defs>
+                            <linearGradient id="logo-grad" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+                                <stop stop-color="#3b82f6"/>
+                                <stop offset="1" stop-color="#8b5cf6"/>
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                    <span>Guard<span class="highlight">Rail</span></span>
+                </div>
+                <div class="version">v1.2.0</div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <button class="nav-item active" id="nav-dashboard" data-tab="dashboard">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"></rect><rect x="14" y="3" width="7" height="5"></rect><rect x="14" y="12" width="7" height="9"></rect><rect x="3" y="16" width="7" height="5"></rect></svg>
+                    <span>Overview</span>
+                </button>
+                <button class="nav-item" id="nav-entra" data-tab="entra">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"></path><path d="M14.31 8l5.74 9.9"></path><path d="M9.69 8h11.48"></path><path d="M7.38 12l5.74-9.9"></path><path d="M9.69 16L3.95 6.1"></path><path d="M14.31 16H2.83"></path><path d="M16.62 12l-5.74 9.9"></path></svg>
+                    <span>Microsoft Entra ID</span>
+                </button>
+                <button class="nav-item" id="nav-onelogin" data-tab="onelogin">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+                    <span>OneLogin IDP</span>
+                </button>
+                <button class="nav-item" id="nav-remediation" data-tab="remediation">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
+                    <span>Remediation Plan</span>
+                </button>
+                <button class="nav-item" id="nav-integrations" data-tab="integrations">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                    <span>Worker Credentials</span>
+                </button>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="tenant-badge active-badge" id="data-status-badge">
+                    <div class="badge-dot pulse-green" id="data-status-dot"></div>
+                    <span id="data-status-text">Querying Worker...</span>
+                </div>
+                <button class="btn btn-secondary-sm" id="btn-quick-scan">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                    <span>Re-Scan Active APIs</span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Window Container -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="app-header">
+                <div class="header-search">
+                    <h1>MFA Security Audit Dashboard</h1>
+                    <p class="subtitle">Cloudflare Worker Edition - Securely queries identity settings from Edge locations.</p>
+                </div>
+                <div class="header-actions">
+                    <div class="tenant-selector">
+                        <label for="tenant-select">Viewing Environment:</label>
+                        <select id="tenant-select" class="dropdown-select">
+                            <option value="all">Global Workspace (Both IDPs)</option>
+                            <option value="entra">Microsoft Entra Tenant</option>
+                            <option value="onelogin">OneLogin Domain</option>
+                        </select>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Scrollable Body Content -->
+            <div class="content-body">
+                <!-- Warnings Panel (Shown only if live scan fails and falls back to sandbox) -->
+                <div class="alert-banner warning-banner" id="warning-diagnostic-banner" style="display:none;">
+                    <div class="alert-icon">⚠️</div>
+                    <div class="alert-details">
+                        <h4>Running in Demo Mode</h4>
+                        <p id="warning-diagnostic-msg">One or more identity providers failed to authenticate. Set secrets in Cloudflare to trigger live scanning.</p>
+                    </div>
+                </div>
+
+                <!-- 1. DASHBOARD VIEW -->
+                <section class="tab-pane active" id="tab-dashboard">
+                    <!-- Top Summary Stats Grid -->
+                    <div class="stats-grid">
+                        <div class="stat-card glass-card score-card-container">
+                            <div class="card-title">MFA Guard Score</div>
+                            <div class="score-circle-wrapper">
+                                <svg class="score-svg" viewBox="0 0 100 100">
+                                    <circle class="score-bg-circle" cx="50" cy="50" r="40"></circle>
+                                    <circle class="score-bar-circle" id="overall-score-ring" cx="50" cy="50" r="40" stroke-dasharray="251.2" stroke-dashoffset="75.36"></circle>
+                                </svg>
+                                <div class="score-text">
+                                    <span class="score-number" id="overall-score-val">--</span>
+                                    <span class="score-pct">%</span>
+                                </div>
+                            </div>
+                            <div class="score-grade" id="overall-score-grade">Evaluating...</div>
+                        </div>
+
+                        <div class="stat-card glass-card border-left-danger">
+                            <div class="stat-header">
+                                <span class="stat-label">Critical Vulnerabilities</span>
+                                <span class="badge badge-danger" id="kpi-critical-count">0</span>
+                            </div>
+                            <div class="stat-value text-glow-danger" id="kpi-critical-val">0 MFA Bypasses</div>
+                            <p class="stat-desc">Critical access vectors requiring immediate configuration correction.</p>
+                            <div class="bar-progress-container">
+                                <div class="bar-progress bg-danger" id="kpi-critical-progress" style="width: 0%"></div>
+                            </div>
+                        </div>
+
+                        <div class="stat-card glass-card border-left-warning">
+                            <div class="stat-header">
+                                <span class="stat-label">Policy Exclusions</span>
+                                <span class="badge badge-warning" id="kpi-exclusions-count">0</span>
+                            </div>
+                            <div class="stat-value text-glow-warning" id="kpi-exclusions-val">0 Policies</div>
+                            <p class="stat-desc">Policies exempting users, regions, or networks from MFA.</p>
+                            <div class="bar-progress-container">
+                                <div class="bar-progress bg-warning" id="kpi-exclusions-progress" style="width: 0%"></div>
+                            </div>
+                        </div>
+
+                        <div class="stat-card glass-card border-left-info">
+                            <div class="stat-header">
+                                <span class="stat-label">Admin Accounts Risk</span>
+                                <span class="badge badge-info" id="kpi-admins-count">0</span>
+                            </div>
+                            <div class="stat-value text-glow-info" id="kpi-admins-val">0 Privileged Users</div>
+                            <p class="stat-desc">High-privilege accounts without enforced MFA configurations.</p>
+                            <div class="bar-progress-container">
+                                <div class="bar-progress bg-info" id="kpi-admins-progress" style="width: 0%"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Security Distribution Charts Section -->
+                    <div class="layout-grid-half">
+                        <!-- Chart 1: Tenant Coverage Analysis -->
+                        <div class="panel glass-card">
+                            <div class="panel-header">
+                                <h3>MFA Registration Coverage</h3>
+                                <span class="panel-tag">Live State</span>
+                            </div>
+                            <div class="panel-body flex-center-col">
+                                <div class="chart-container-donut">
+                                    <svg viewBox="0 0 100 100" class="donut-chart-svg">
+                                        <circle class="donut-ring-base" cx="50" cy="50" r="35"></circle>
+                                        <circle class="donut-ring-segment donut-seg-success" id="donut-segment-enrolled" cx="50" cy="50" r="35" stroke-dasharray="219.9" stroke-dashoffset="219.9"></circle>
+                                        <circle class="donut-ring-segment donut-seg-danger" id="donut-segment-unenrolled" cx="50" cy="50" r="35" stroke-dasharray="219.9" stroke-dashoffset="219.9" style="transform: rotate(270deg); transform-origin: center;"></circle>
+                                    </svg>
+                                    <div class="donut-center-text">
+                                        <span id="donut-enrolled-pct">--%</span>
+                                        <span class="donut-center-lbl">Secure Users</span>
+                                    </div>
+                                </div>
+                                <div class="chart-legend">
+                                    <div class="legend-item"><span class="dot bg-success"></span><span>MFA Enrolled (<span id="lbl-leg-enrolled">--</span> Users)</span></div>
+                                    <div class="legend-item"><span class="dot bg-danger"></span><span>MFA Missing (<span id="lbl-leg-missing">--</span> Users)</span></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Chart 2: Threat Matrix -->
+                        <div class="panel glass-card">
+                            <div class="panel-header">
+                                <h3>Security Risk Categories</h3>
+                                <span class="panel-tag">By Platform</span>
+                            </div>
+                            <div class="panel-body flex-center">
+                                <div class="risk-matrix">
+                                    <div class="matrix-row">
+                                        <span class="matrix-label">MFA Exclusions</span>
+                                        <div class="matrix-bar-track">
+                                            <div class="matrix-bar bg-danger" id="bar-exclusions" style="width: 0%;"></div>
+                                        </div>
+                                        <span class="matrix-val" id="val-matrix-exclusions">-- Findings</span>
+                                    </div>
+                                    <div class="matrix-row">
+                                        <span class="matrix-label">Legacy Protocols</span>
+                                        <div class="matrix-bar-track">
+                                            <div class="matrix-bar bg-warning" id="bar-legacy" style="width: 0%;"></div>
+                                        </div>
+                                        <span class="matrix-val" id="val-matrix-legacy">-- Findings</span>
+                                    </div>
+                                    <div class="matrix-row">
+                                        <span class="matrix-label">Unenrolled Admins</span>
+                                        <div class="matrix-bar-track">
+                                            <div class="matrix-bar bg-danger" id="bar-admins" style="width: 0%;"></div>
+                                        </div>
+                                        <span class="matrix-val" id="val-matrix-admins">-- Findings</span>
+                                    </div>
+                                    <div class="matrix-row">
+                                        <span class="matrix-label">Weak Factors Enrolled</span>
+                                        <div class="matrix-bar-track">
+                                            <div class="matrix-bar bg-info" id="bar-weak" style="width: 0%;"></div>
+                                        </div>
+                                        <span class="matrix-val" id="val-matrix-weak">-- Findings</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Vulnerabilities & Misconfiguration Feed -->
+                    <div class="panel glass-card table-panel">
+                        <div class="panel-header flex-between">
+                            <div class="panel-title-group">
+                                <h3>Active Configuration Violations</h3>
+                                <p class="panel-desc">All identified security weaknesses ranked by risk severity.</p>
+                            </div>
+                            <div class="filters-container">
+                                <button class="btn btn-filter active" data-filter="all">All Platforms</button>
+                                <button class="btn btn-filter" data-filter="entra">Microsoft Entra</button>
+                                <button class="btn btn-filter" data-filter="onelogin">OneLogin</button>
+                            </div>
+                        </div>
+                        <div class="table-scroll-container">
+                            <table class="data-table" id="violations-table">
+                                <thead>
+                                    <tr>
+                                        <th>Risk Vector</th>
+                                        <th>Provider</th>
+                                        <th>Impact Scope</th>
+                                        <th>Threat Analysis</th>
+                                        <th>Severity</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="violations-list">
+                                    <tr><td colspan="6" class="text-center">Initializing scanner on Cloudflare Worker...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 2. MICROSOFT ENTRA ID VIEW -->
+                <section class="tab-pane" id="tab-entra">
+                    <div class="platform-meta-card glass-card">
+                        <div class="platform-logo-title">
+                            <div class="azure-icon-box">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z" fill="#0078d4"/></svg>
+                            </div>
+                            <div>
+                                <h2>Microsoft Entra ID Security Tenant Check</h2>
+                                <p class="platform-meta-info" id="entra-tenant-meta">Tenant Domain: <strong>Evaluating...</strong> | Policies Evaluated: <span class="badge badge-normal" id="entra-policies-count-badge">-- Policies</span></p>
+                            </div>
+                        </div>
+                        <div class="platform-risk-badge bg-badge-danger" id="entra-risk-status">Checking Status...</div>
+                    </div>
+
+                    <!-- Tabs inside Entra Pane -->
+                    <div class="sub-tab-container">
+                        <button class="sub-tab active" data-subtab="entra-ca">Conditional Access Policies (<span id="entra-ca-count">--</span>)</button>
+                        <button class="sub-tab" data-subtab="entra-users">Vulnerable Users & Roles (<span id="entra-users-count">--</span>)</button>
+                        <button class="sub-tab" data-subtab="entra-settings">Tenant-wide Settings (<span id="entra-settings-count">--</span>)</button>
+                    </div>
+
+                    <!-- Sub-pane 1: Entra CA -->
+                    <div class="sub-pane active" id="subtab-entra-ca">
+                        <div class="panel glass-card no-margin">
+                            <div class="panel-header">
+                                <h3>Conditional Access Audit Report</h3>
+                            </div>
+                            <div class="table-scroll-container">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Policy Name</th>
+                                            <th>State</th>
+                                            <th>Target Users/Groups</th>
+                                            <th>Target Resources</th>
+                                            <th>Configured Access Controls</th>
+                                            <th>Findings</th>
+                                            <th>Risk</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="entra-ca-table-body">
+                                        <!-- Dynamic JS Injection -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Sub-pane 2: Entra Users -->
+                    <div class="sub-pane" id="subtab-entra-users">
+                        <div class="panel glass-card no-margin">
+                            <div class="panel-header">
+                                <h3>User Account & Directory Role Audit</h3>
+                            </div>
+                            <div class="table-scroll-container">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>User Principal Name (UPN)</th>
+                                            <th>Assigned Directory Roles</th>
+                                            <th>MFA Enrolled</th>
+                                            <th>MFA Enforced Via Policy</th>
+                                            <th>Active App Passwords</th>
+                                            <th>Risk Analysis</th>
+                                            <th>Risk</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="entra-users-table-body">
+                                        <!-- Dynamic JS Injection -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Sub-pane 3: Entra Tenant-wide Settings -->
+                    <div class="sub-pane" id="subtab-entra-settings">
+                        <div class="panel glass-card no-margin">
+                            <div class="panel-header">
+                                <h3>Tenant Authentication Methods & Protocols</h3>
+                            </div>
+                            <div class="table-scroll-container">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Setting / Configuration Node</th>
+                                            <th>Current Config State</th>
+                                            <th>Recommended Standard</th>
+                                            <th>Compliance Result</th>
+                                            <th>Security Implication</th>
+                                            <th>Risk</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="entra-settings-table-body">
+                                        <!-- Dynamic JS Injection -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 3. ONELOGIN IDP VIEW -->
+                <section class="tab-pane" id="tab-onelogin">
+                    <div class="platform-meta-card glass-card">
+                        <div class="platform-logo-title">
+                            <div class="onelogin-icon-box">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5z" fill="#fc4c02"/></svg>
+                            </div>
+                            <div>
+                                <h2>OneLogin Identity Provider Security Check</h2>
+                                <p class="platform-meta-info" id="onelogin-domain-meta">Subdomain: <strong>Evaluating...</strong> | Active Rules Check: <span class="badge badge-normal" id="onelogin-policies-count-badge">-- Policies</span></p>
+                            </div>
+                        </div>
+                        <div class="platform-risk-badge bg-badge-warning" id="onelogin-risk-status">Checking Status...</div>
+                    </div>
+
+                    <!-- Tabs inside OneLogin Pane -->
+                    <div class="sub-tab-container">
+                        <button class="sub-tab active" data-subtab="onelogin-policies">User Security Policies (<span id="onelogin-policies-count">--</span>)</button>
+                        <button class="sub-tab" data-subtab="onelogin-users">User MFA Enrollment (<span id="onelogin-users-count">--</span>)</button>
+                    </div>
+
+                    <!-- Sub-pane 1: OneLogin Policies -->
+                    <div class="sub-pane active" id="subtab-onelogin-policies">
+                        <div class="panel glass-card no-margin">
+                            <div class="panel-header">
+                                <h3>User Policy Configurations</h3>
+                            </div>
+                            <div class="table-scroll-container">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>OneLogin Policy Name</th>
+                                            <th>MFA Enforced Status</th>
+                                            <th>OTP Registration Rule</th>
+                                            <th>Trusted Network Bypass</th>
+                                            <th>Vulnerable Configurations</th>
+                                            <th>Risk</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="onelogin-policies-table-body">
+                                        <!-- Dynamic JS Injection -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Sub-pane 2: OneLogin Users -->
+                    <div class="sub-pane" id="subtab-onelogin-users">
+                        <div class="panel glass-card no-margin">
+                            <div class="panel-header">
+                                <h3>User Profiles & Authentication Factors</h3>
+                            </div>
+                            <div class="table-scroll-container">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Username / Email</th>
+                                            <th>User Status</th>
+                                            <th>Assigned Policy</th>
+                                            <th>Registered MFA Devices</th>
+                                            <th>Bypass Risk Analysis</th>
+                                            <th>Risk</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="onelogin-users-table-body">
+                                        <!-- Dynamic JS Injection -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 4. REMEDIATION PLANS -->
+                <section class="tab-pane" id="tab-remediation">
+                    <div class="remediation-header">
+                        <h2>Step-by-Step Security Remediation Guide</h2>
+                        <p>Detailed execution paths to close all identified MFA gaps and conditional access bypass issues.</p>
+                    </div>
+
+                    <div class="remediation-container">
+                        <!-- Left Navigation: Remediation Selector -->
+                        <aside class="remediation-menu glass-card">
+                            <div class="menu-label">Active Issue Remediation</div>
+                            <div class="remediation-menu-list" id="remediation-menu-list">
+                                <!-- Populated dynamically by JS -->
+                            </div>
+                        </aside>
+
+                        <!-- Right Detail Panel -->
+                        <div class="remediation-detail-panel glass-card" id="remediation-detail-panel">
+                            <div class="empty-state">
+                                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"/></svg>
+                                <h3>Select a finding on the left</h3>
+                                <p>Review visual instructions, code configurations, and script commands to fix findings.</p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 5. INTEGRATIONS & DATA SOURCE PANEL -->
+                <section class="tab-pane" id="tab-integrations">
+                    <div class="layout-grid-half">
+                        <!-- Left Panel: Secret Status Indicators -->
+                        <div class="panel glass-card">
+                            <div class="panel-header">
+                                <h3>Cloudflare Workers Environment Status</h3>
+                                <span class="panel-tag tag-primary">Secrets Check</span>
+                            </div>
+                            <div class="panel-body">
+                                <p class="desc-text-sm">Rather than collecting keys client-side, GuardRail references environment variables securely bound to the Edge Worker sandbox.</p>
+                                
+                                <div class="credentials-status-list">
+                                    <div class="credential-status-item">
+                                        <div>
+                                            <strong>Entra Tenant Credentials</strong>
+                                            <p class="desc-text-sm no-margin">ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET</p>
+                                        </div>
+                                        <div class="status-indicator" id="secret-status-entra">
+                                            <span class="status-dot dot-loading"></span> Checking...
+                                        </div>
+                                    </div>
+                                    <div class="credential-status-item">
+                                        <div>
+                                            <strong>OneLogin API Keys</strong>
+                                            <p class="desc-text-sm no-margin">ONELOGIN_CLIENT_ID, ONELOGIN_CLIENT_SECRET, ONELOGIN_SUBDOMAIN</p>
+                                        </div>
+                                        <div class="status-indicator" id="secret-status-onelogin">
+                                            <span class="status-dot dot-loading"></span> Checking...
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="alert-banner info-banner" style="margin-top: 1.5rem;">
+                                    <div class="alert-icon">💡</div>
+                                    <div class="alert-details">
+                                        <p style="font-size: 0.82rem; line-height: 1.4;">If you are seeing <strong>"Not Loaded"</strong>, it means the Edge Worker is utilizing default sandbox fallback data. Register active credentials by running the command lines on the right.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right Panel: Secrets CLI Guide -->
+                        <div class="panel glass-card">
+                            <div class="panel-header">
+                                <h3>How to Configure Worker Secrets</h3>
+                                <span class="panel-tag tag-sec">CLI Execution</span>
+                            </div>
+                            <div class="panel-body">
+                                <p class="desc-text-sm">Execute the following commands in your local workspace terminal where Wrangler CLI is configured to write keys to the worker environment:</p>
+                                
+                                <div class="script-tabs">
+                                    <button class="script-tab-btn active" data-script="setup-entra">Microsoft Entra</button>
+                                    <button class="script-tab-btn" data-script="setup-ol">OneLogin</button>
+                                </div>
+
+                                <!-- Entra Commands -->
+                                <div class="script-content active" id="script-setup-entra">
+                                    <div class="code-header">
+                                        <span>Terminal</span>
+                                        <button class="btn-code-copy" data-copy-target="code-secrets-entra">Copy Commands</button>
+                                    </div>
+                                    <pre><code class="code-block" id="code-secrets-entra"># Set Microsoft Entra Tenant ID
+echo "your-tenant-uuid" | npx wrangler secret put ENTRA_TENANT_ID
+
+# Set Microsoft Entra App registration Client ID
+echo "your-client-app-uuid" | npx wrangler secret put ENTRA_CLIENT_ID
+
+# Set Microsoft Entra App registration Client Secret
+echo "your-secret-string" | npx wrangler secret put ENTRA_CLIENT_SECRET</code></pre>
+                                </div>
+
+                                <!-- OneLogin Commands -->
+                                <div class="script-content" id="script-setup-ol">
+                                    <div class="code-header">
+                                        <span>Terminal</span>
+                                        <button class="btn-code-copy" data-copy-target="code-secrets-ol">Copy Commands</button>
+                                    </div>
+                                    <pre><code class="code-block" id="code-secrets-ol"># Set OneLogin REST API Client ID
+echo "your-client-id" | npx wrangler secret put ONELOGIN_CLIENT_ID
+
+# Set OneLogin REST API Client Secret
+echo "your-client-secret" | npx wrangler secret put ONELOGIN_CLIENT_SECRET
+
+# Set OneLogin Domain Prefix (e.g. contoso-admin)
+echo "your-subdomain" | npx wrangler secret put ONELOGIN_SUBDOMAIN
+
+# Set API Domain Region (us or eu)
+echo "us" | npx wrangler secret put ONELOGIN_REGION</code></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <!-- Alert Banner Container for dynamic toast notifications -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Application Script -->
+    <script src="app.js"></script>
+</body>
+</html>

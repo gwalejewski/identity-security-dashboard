@@ -1,0 +1,6 @@
+name = "identity-security-dashboard"
+main = "src/index.js"
+compatibility_date = "2026-08-24"
+
+[assets]
+directory = "./public"

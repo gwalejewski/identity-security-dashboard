@@ -256,6 +256,7 @@ async function scanEntraID(env, refresh = false) {
     let users = [];
     let isCapped = false;
     let isCached = false;
+    let kvWriteError = null;
     
     if (env.GUARDRAIL_DB && !refresh) {
         try {
@@ -363,7 +364,6 @@ async function scanEntraID(env, refresh = false) {
         }
 
         // Save back to KV Database Cache if enabled
-        let kvWriteError = null;
         if (env.GUARDRAIL_DB && users.length > 0) {
             try {
                 await env.GUARDRAIL_DB.put("entra_users", JSON.stringify(users));
@@ -463,6 +463,7 @@ async function scanOneLogin(env, refresh = false) {
     let users = [];
     let isCapped = false;
     let isCached = false;
+    let kvWriteError = null;
 
     if (env.GUARDRAIL_DB && !refresh) {
         try {
@@ -559,7 +560,6 @@ async function scanOneLogin(env, refresh = false) {
         });
 
         // Save back to KV Database Cache if enabled
-        let kvWriteError = null;
         if (env.GUARDRAIL_DB && users.length > 0) {
             try {
                 await env.GUARDRAIL_DB.put("onelogin_users", JSON.stringify(users));

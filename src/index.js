@@ -374,7 +374,7 @@ async function scanEntraID(env, refresh = false) {
         const excludedUPNs = new Set();
         let rawUsers = [];
         try {
-            let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$top=999`;
+            let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,companyName,onPremisesDistinguishedName,${scsAttrName}&$top=999`;
             let pageCount = 0;
             while (usersUrl && pageCount < 15) {
                 const res = await fetch(usersUrl, { headers: { 'Authorization': `Bearer ${token}` } });
@@ -397,9 +397,12 @@ async function scanEntraID(env, refresh = false) {
                     const upn = u.userPrincipalName.toLowerCase();
                     const dn = (u.onPremisesDistinguishedName || "").toLowerCase();
                     const hasSurname = u.surname && !isDummySurname(u.surname);
+                    const company = (u.companyName || "").trim().toLowerCase();
+                    const hasValidCompany = company === "steelcase inc." || company === "hni";
                     
                     const shouldExclude = hasSCSAffiliationCodeADM(u) || 
                         !hasSurname ||
+                        !hasValidCompany ||
                         dn.includes("service account") || 
                         dn.includes("service-account") || 
                         dn.includes("services accounts") || 
@@ -516,7 +519,7 @@ async function scanEntraID(env, refresh = false) {
             let fallbackUsers = [];
             let pageCount = 0;
             try {
-                let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$top=999`;
+                let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,companyName,onPremisesDistinguishedName,${scsAttrName}&$top=999`;
                 while (usersUrl && pageCount < 15) {
                     const usersRes = await fetch(usersUrl, { headers: { 'Authorization': `Bearer ${token}` } });
                     if (usersRes.ok) {
@@ -540,12 +543,14 @@ async function scanEntraID(env, refresh = false) {
                     const userType = (u.userType || "").toLowerCase();
                     const dn = (u.onPremisesDistinguishedName || "").toLowerCase();
                     const hasSurname = u.surname && !isDummySurname(u.surname);
+                    const company = (u.companyName || "").trim().toLowerCase();
+                    const hasValidCompany = company === "steelcase inc." || company === "hni";
                     
                     // Exclude guest account types
                     if (upn.includes("#ext#") || userType === "guest" || upn.includes("guest") || displayName.includes("guest")) return false;
                     
-                    // Exclude if missing last name
-                    if (!hasSurname) return false;
+                    // Exclude if missing last name or invalid company name
+                    if (!hasSurname || !hasValidCompany) return false;
                     
                     // Exclude service accounts (including DN OU check)
                     if (upn.startsWith("svc") || upn.startsWith("sa-") || upn.startsWith("sa_") || upn.includes("service") || upn.includes("serviceaccount") || displayName.includes("service account") || displayName.includes("svc-") || 
@@ -746,16 +751,18 @@ async function scanOneLogin(env, refresh = false) {
                     const firstname = (u.firstname || "").toLowerCase();
                     const lastname = (u.lastname || "").toLowerCase();
                     const name = `${firstname} ${lastname}`;
+                    const company = (u.company || "").trim().toLowerCase();
+                    const hasValidCompany = company === "steelcase inc." || company === "hni";
                     
                     // Exclude guest account types
                     if (email.includes("guest") || username.includes("guest") || name.includes("guest")) {
                         return false;
                     }
 
-                    // Exclude if missing last name or manager
+                    // Exclude if missing last name, manager, or invalid company
                     const hasLastName = u.lastname && String(u.lastname).trim().length > 0;
                     const hasManager = (u.manager_user_id !== null && u.manager_user_id !== undefined && u.manager_user_id !== "") || (u.manager_ad_id !== null && u.manager_ad_id !== undefined && u.manager_ad_id !== "");
-                    if (!hasLastName || !hasManager) {
+                    if (!hasLastName || !hasManager || !hasValidCompany) {
                         return false;
                     }
                     

@@ -183,6 +183,45 @@ function hasSCSAffiliationCodeADM(u) {
     return false;
 }
 
+// Dynamically resolve the extension attribute name for scsaffiliationcode in the tenant
+async function resolveSCSAffiliationAttribute(token) {
+    let scsAttrName = "scsaffiliationcode";
+    try {
+        // 1. Try on-premises synced properties
+        let res = await fetch("https://graph.microsoft.com/beta/directoryObjects/getAvailableExtensionProperties", {
+            method: "POST",
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ isSyncedFromOnPremises: true })
+        });
+        if (res.ok) {
+            const data = await res.json();
+            const matched = (data.value || []).find(p => p.name && p.name.toLowerCase().includes("scsaffiliationcode"));
+            if (matched) return matched.name;
+        }
+
+        // 2. Try cloud-only properties if not found
+        res = await fetch("https://graph.microsoft.com/beta/directoryObjects/getAvailableExtensionProperties", {
+            method: "POST",
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ isSyncedFromOnPremises: false })
+        });
+        if (res.ok) {
+            const data = await res.json();
+            const matched = (data.value || []).find(p => p.name && p.name.toLowerCase().includes("scsaffiliationcode"));
+            if (matched) return matched.name;
+        }
+    } catch (e) {
+        // Ignore and fallback to default
+    }
+    return scsAttrName;
+}
+
 // Authenticate and fetch Microsoft Entra ID assets
 async function scanEntraID(env, refresh = false) {
     if (!env.ENTRA_TENANT_ID || !env.ENTRA_CLIENT_ID || !env.ENTRA_CLIENT_SECRET) {
@@ -280,10 +319,12 @@ async function scanEntraID(env, refresh = false) {
     }
 
     if (!isCached) {
+        const scsAttrName = await resolveSCSAffiliationAttribute(token);
+
         // Query users metadata first to find ADM affiliation codes
         const excludedUPNs = new Set();
         try {
-            let usersUrl = "https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,scsaffiliationcode";
+            let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,${scsAttrName}`;
             let rawUsers = [];
             let pageCount = 0;
             while (usersUrl && pageCount < 15) {
@@ -370,7 +411,7 @@ async function scanEntraID(env, refresh = false) {
             });
         } catch (e) {
             // Fallback to basic Users API list with pagination support
-            let usersUrl = "https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,scsaffiliationcode";
+            let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,${scsAttrName}`;
             let rawDetails = [];
             let pageCount = 0;
 

@@ -883,4 +883,136 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
         openDetailsModal("Admin Accounts Risk Audit", html);
     });
+
+    document.getElementById("panel-click-coverage").addEventListener("click", () => {
+        if (!currentReport) return;
+        
+        let missingMfaUsers = [];
+        if (currentReport.entra && currentReport.entra.users) {
+            currentReport.entra.users.forEach(u => {
+                if (u.mfaRegistered === "No") {
+                    missingMfaUsers.push({
+                        identity: u.upn,
+                        platform: "Microsoft Entra ID",
+                        role: u.roles,
+                        reason: u.findings
+                    });
+                }
+            });
+        }
+        if (currentReport.onelogin && currentReport.onelogin.users) {
+            currentReport.onelogin.users.forEach(u => {
+                if (u.mfaDevices === "None Enrolled") {
+                    missingMfaUsers.push({
+                        identity: u.username,
+                        platform: "OneLogin",
+                        role: u.status === "Active" ? "Active User" : "Suspended",
+                        reason: u.bypassRisk
+                    });
+                }
+            });
+        }
+
+        let html = `
+            <p class="desc-text-sm" style="margin-bottom: 1rem;">Users currently missing registered MFA verification factors:</p>
+        `;
+        if (missingMfaUsers.length === 0) {
+            html += `<div class="empty-state">All active users have registered MFA.</div>`;
+        } else {
+            html += `
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>User Identity</th>
+                            <th>Platform</th>
+                            <th>Status / Role</th>
+                            <th>MFA Alert Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+            missingMfaUsers.forEach(u => {
+                html += `
+                    <tr>
+                        <td><strong>${u.identity}</strong></td>
+                        <td><span class="badge ${u.platform.includes('Entra') ? 'badge-info' : 'badge-warning'}">${u.platform}</span></td>
+                        <td><p class="desc-text-sm no-margin" style="color:var(--text-secondary)">${u.role}</p></td>
+                        <td><p class="desc-text-sm no-margin" style="color:var(--danger); font-size:0.8rem;">${u.reason}</p></td>
+                    </tr>
+                `;
+            });
+            html += `</tbody></table>`;
+        }
+        openDetailsModal("MFA Missing Registration List", html);
+    });
+
+    document.getElementById("panel-click-risk").addEventListener("click", () => {
+        if (!currentReport) return;
+        const violations = currentReport.violations;
+        
+        // Group findings by threat risk category
+        const bypassIssues = violations.filter(v => 
+            v.severity === "critical" || 
+            v.title.toLowerCase().includes("disabled") || 
+            v.title.toLowerCase().includes("bypass") || 
+            v.title.toLowerCase().includes("legacy")
+        );
+        const policyIssues = violations.filter(v => 
+            v.severity === "high" || 
+            v.title.toLowerCase().includes("exclusion") || 
+            v.title.toLowerCase().includes("optional") || 
+            v.title.toLowerCase().includes("report-only")
+        );
+        const userIssues = violations.filter(v => 
+            v.title.toLowerCase().includes("unregistered") || 
+            v.title.toLowerCase().includes("unenrolled") || 
+            v.title.toLowerCase().includes("lacks mfa")
+        );
+        const weakFactorIssues = violations.filter(v => 
+            v.title.toLowerCase().includes("weak") || 
+            v.title.toLowerCase().includes("sms") || 
+            v.title.toLowerCase().includes("voice")
+        );
+
+        let html = `
+            <p class="desc-text-sm" style="margin-bottom: 1rem;">Summary of configuration risks categorized by severity and impact:</p>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Risk Category</th>
+                        <th>Impact Level</th>
+                        <th>Count</th>
+                        <th>Description of Bypass Potential</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr style="background: rgba(220,53,69,0.05);">
+                        <td><strong>Direct MFA Bypasses</strong></td>
+                        <td><span class="badge badge-danger">Critical</span></td>
+                        <td><strong>${bypassIssues.length}</strong></td>
+                        <td>Disabled policies, legacy authentication protocols, or IP exemptions allowing login without MFA.</td>
+                    </tr>
+                    <tr style="background: rgba(255,193,7,0.05);">
+                        <td><strong>MFA Policy Exclusions</strong></td>
+                        <td><span class="badge badge-warning">High</span></td>
+                        <td><strong>${policyIssues.length}</strong></td>
+                        <td>Conditional Access policies with active group exclusions or optional enrollment states.</td>
+                    </tr>
+                    <tr style="background: rgba(23,162,184,0.05);">
+                        <td><strong>Unenrolled Admin Accounts</strong></td>
+                        <td><span class="badge badge-info">Medium</span></td>
+                        <td><strong>${userIssues.length}</strong></td>
+                        <td>High-privilege administrators who have not registered a physical authentication factor.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Weak MFA Factors</strong></td>
+                        <td><span class="badge" style="background:var(--bg-secondary); color:var(--text-secondary);">Low</span></td>
+                        <td><strong>${weakFactorIssues.length}</strong></td>
+                        <td>Users utilizing SMS or Voice OTP, susceptible to SIM-swapping or phishing.</td>
+                    </tr>
+                </tbody>
+            </table>
+        `;
+        openDetailsModal("Security Risk Category Analysis", html);
+    });
 });

@@ -633,14 +633,6 @@ function runSecurityScanRules(entraData, oneloginData) {
                 }
 
                 if (user.mfaDevices && (user.mfaDevices.includes("SMS") || user.mfaDevices.includes("Voice"))) {
-                    violations.push({
-                        id: `ol-weak-${user.username.split('@')[0]}`,
-                        title: `Weak MFA Factor Configured: ${user.username}`,
-                        platform: "OneLogin",
-                        scope: "SMS / Voice OTP",
-                        threat: "Uses telephony factor. Exposed to SIM-swap attacks, SMS interception, or social engineering redirects.",
-                        severity: "medium"
-                    });
                     metrics.weakFactorsCount++;
                     metrics.score -= 3;
                 }

@@ -324,7 +324,7 @@ async function scanEntraID(env, refresh = false) {
         // Query users metadata first to find ADM affiliation codes
         const excludedUPNs = new Set();
         try {
-            let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,${scsAttrName}`;
+            let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,onPremisesDistinguishedName,${scsAttrName}`;
             let rawUsers = [];
             let pageCount = 0;
             while (usersUrl && pageCount < 15) {
@@ -341,7 +341,8 @@ async function scanEntraID(env, refresh = false) {
             rawUsers.forEach(u => {
                 if (u.userPrincipalName) {
                     const upn = u.userPrincipalName.toLowerCase();
-                    if (hasSCSAffiliationCodeADM(u)) {
+                    const dn = (u.onPremisesDistinguishedName || "").toLowerCase();
+                    if (hasSCSAffiliationCodeADM(u) || dn.includes("service account") || dn.includes("service-account") || dn.includes("ou=service")) {
                         excludedUPNs.add(upn);
                     }
                 }
@@ -412,8 +413,7 @@ async function scanEntraID(env, refresh = false) {
                 };
             });
         } catch (e) {
-            // Fallback to basic Users API list with pagination support
-            let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,${scsAttrName}`;
+            let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,onPremisesDistinguishedName,${scsAttrName}`;
             let rawDetails = [];
             let pageCount = 0;
 
@@ -429,12 +429,13 @@ async function scanEntraID(env, refresh = false) {
                         const upn = u.userPrincipalName.toLowerCase();
                         const displayName = (u.displayName || "").toLowerCase();
                         const userType = (u.userType || "").toLowerCase();
+                        const dn = (u.onPremisesDistinguishedName || "").toLowerCase();
                         
                         // Exclude guest account types
                         if (upn.includes("#ext#") || userType === "guest" || upn.includes("guest") || displayName.includes("guest")) return false;
                         
-                        // Exclude service accounts
-                        if (upn.startsWith("svc") || upn.startsWith("sa-") || upn.startsWith("sa_") || upn.includes("service") || upn.includes("serviceaccount") || displayName.includes("service account") || displayName.includes("svc-")) {
+                        // Exclude service accounts (including DN OU check)
+                        if (upn.startsWith("svc") || upn.startsWith("sa-") || upn.startsWith("sa_") || upn.includes("service") || upn.includes("serviceaccount") || displayName.includes("service account") || displayName.includes("svc-") || dn.includes("service account") || dn.includes("service-account") || dn.includes("ou=service")) {
                             return false;
                         }
                         

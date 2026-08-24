@@ -283,6 +283,40 @@ async function checkManagersForUsers(token, upns) {
     return hasManagerMap;
 }
 
+// Helper to query and fetch all members of the 'Unfederated' AD group
+async function getUnfederatedGroupMembers(token) {
+    const unfederatedUPNs = new Set();
+    try {
+        const res = await fetch("https://graph.microsoft.com/beta/groups?$filter=displayName eq 'Unfederated' or startswith(displayName, 'Unfederated')", {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+            const data = await res.json();
+            const groups = data.value || [];
+            for (const group of groups) {
+                let membersUrl = `https://graph.microsoft.com/beta/groups/${group.id}/members?$select=id,userPrincipalName&$top=999`;
+                while (membersUrl) {
+                    const mRes = await fetch(membersUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+                    if (mRes.ok) {
+                        const mData = await mRes.json();
+                        (mData.value || []).forEach(m => {
+                            if (m.userPrincipalName) {
+                                unfederatedUPNs.add(m.userPrincipalName.toLowerCase());
+                            }
+                        });
+                        membersUrl = mData["@odata.nextLink"] || null;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        // Fallback
+    }
+    return unfederatedUPNs;
+}
+
 // Authenticate and fetch Microsoft Entra ID assets
 async function scanEntraID(env, refresh = false) {
     if (!env.ENTRA_TENANT_ID || !env.ENTRA_CLIENT_ID || !env.ENTRA_CLIENT_SECRET) {
@@ -367,6 +401,7 @@ async function scanEntraID(env, refresh = false) {
     let isCached = false;
     let kvWriteError = null;
     let metadataWarning = null;
+    let unfederatedUPNs = new Set();
     
     if (env.GUARDRAIL_DB && !refresh) {
         try {
@@ -374,6 +409,10 @@ async function scanEntraID(env, refresh = false) {
             if (cachedUsers && Array.isArray(cachedUsers) && cachedUsers.length > 0) {
                 users = cachedUsers;
                 isCached = true;
+                const cachedUnfed = await env.GUARDRAIL_DB.get("entra_unfederated", "json");
+                if (cachedUnfed && Array.isArray(cachedUnfed)) {
+                    unfederatedUPNs = new Set(cachedUnfed);
+                }
             }
         } catch (e) {
             // Fallback to live scan
@@ -382,6 +421,11 @@ async function scanEntraID(env, refresh = false) {
 
     if (!isCached) {
         const scsAttrName = await resolveSCSAffiliationAttribute(token);
+        
+        try {
+            const groupMembers = await getUnfederatedGroupMembers(token);
+            groupMembers.forEach(m => unfederatedUPNs.add(m));
+        } catch (err) {}
 
         // 1. Bulk Users Metadata Query (no expand, fast, supports $top=999)
         const excludedUPNs = new Set();
@@ -623,6 +667,7 @@ async function scanEntraID(env, refresh = false) {
         if (env.GUARDRAIL_DB && users.length > 0) {
             try {
                 await env.GUARDRAIL_DB.put("entra_users", JSON.stringify(users));
+                await env.GUARDRAIL_DB.put("entra_unfederated", JSON.stringify(Array.from(unfederatedUPNs)));
             } catch (e) {
                 kvWriteError = e.message;
             }
@@ -687,6 +732,7 @@ async function scanEntraID(env, refresh = false) {
         policies,
         users,
         settings,
+        unfederatedUPNs: Array.from(unfederatedUPNs),
         warning: warningMsg
     };
 }
@@ -1146,6 +1192,40 @@ export default {
                 scanOutput.warnings.push(`OneLogin Scan: ${err.message}`);
                 scanOutput.onelogin = SANDBOX_DATA.onelogin;
                 scanOutput.isDemoMode = true;
+            }
+
+            // 2.5. Adjust Entra ID users based on federation status and OneLogin MFA registration
+            if (scanOutput.entra && scanOutput.entra.users) {
+                const unfedSet = new Set((scanOutput.entra.unfederatedUPNs || []).map(u => u.toLowerCase()));
+                
+                const oneloginMfaUsers = new Set();
+                if (scanOutput.onelogin && scanOutput.onelogin.users) {
+                    scanOutput.onelogin.users.forEach(ou => {
+                        const hasMfa = ou.mfaDevices && ou.mfaDevices !== "None Enrolled";
+                        const username = (ou.username || "").toLowerCase();
+                        const email = (ou.email || "").toLowerCase();
+                        if (hasMfa) {
+                            if (username) oneloginMfaUsers.add(username);
+                            if (email) oneloginMfaUsers.add(email);
+                        }
+                    });
+                }
+
+                scanOutput.entra.users.forEach(u => {
+                    if (u.upn) {
+                        const upn = u.upn.toLowerCase();
+                        const isFederated = !unfedSet.has(upn);
+                        
+                        if (isFederated && u.mfaRegistered === "No") {
+                            // If they have MFA in OneLogin, they are compliant via federation
+                            if (oneloginMfaUsers.has(upn)) {
+                                u.mfaRegistered = "Yes (OneLogin SSO)";
+                                u.findings = "Compliant: MFA managed and enforced via OneLogin federation.";
+                                u.severity = "success";
+                            }
+                        }
+                    }
+                });
             }
 
             // 3. Process structural scan violations

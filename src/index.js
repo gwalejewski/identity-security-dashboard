@@ -283,7 +283,19 @@ async function scanEntraID(env, refresh = false) {
                 if (reportsRes.ok) {
                     const reportsData = await reportsRes.json();
                     const pageDetails = reportsData.value || [];
-                    const filteredPage = pageDetails.filter(d => d.userPrincipalName && !d.userPrincipalName.includes("#EXT#"));
+                    const filteredPage = pageDetails.filter(d => {
+                        if (!d.userPrincipalName) return false;
+                        const upn = d.userPrincipalName.toLowerCase();
+                        const displayName = (d.displayName || "").toLowerCase();
+                        
+                        if (upn.includes("#ext#")) return false;
+                        
+                        // Exclude service accounts
+                        if (upn.startsWith("svc") || upn.startsWith("sa-") || upn.startsWith("sa_") || upn.includes("service") || upn.includes("serviceaccount") || displayName.includes("service account") || displayName.includes("svc-")) {
+                            return false;
+                        }
+                        return true;
+                    });
                     rawDetails = rawDetails.concat(filteredPage);
                     
                     reportsUrl = reportsData["@odata.nextLink"] || null;
@@ -326,7 +338,19 @@ async function scanEntraID(env, refresh = false) {
                 if (usersRes.ok) {
                     const usersData = await usersRes.json();
                     const pageDetails = usersData.value || [];
-                    const filteredPage = pageDetails.filter(u => u.userPrincipalName && !u.userPrincipalName.includes("#EXT#"));
+                    const filteredPage = pageDetails.filter(u => {
+                        if (!u.userPrincipalName) return false;
+                        const upn = u.userPrincipalName.toLowerCase();
+                        const displayName = (u.displayName || "").toLowerCase();
+                        
+                        if (upn.includes("#ext#")) return false;
+                        
+                        // Exclude service accounts
+                        if (upn.startsWith("svc") || upn.startsWith("sa-") || upn.startsWith("sa_") || upn.includes("service") || upn.includes("serviceaccount") || displayName.includes("service account") || displayName.includes("svc-")) {
+                            return false;
+                        }
+                        return true;
+                    });
                     rawDetails = rawDetails.concat(filteredPage);
                     
                     usersUrl = usersData["@odata.nextLink"] || null;
@@ -491,7 +515,21 @@ async function scanOneLogin(env, refresh = false) {
 
             if (usersRes.ok) {
                 const pageUsers = await usersRes.json();
-                rawUsers = rawUsers.concat(pageUsers);
+                const filteredPage = pageUsers.filter(u => {
+                    const email = (u.email || "").toLowerCase();
+                    const username = (u.username || "").toLowerCase();
+                    const firstname = (u.firstname || "").toLowerCase();
+                    const lastname = (u.lastname || "").toLowerCase();
+                    const name = `${firstname} ${lastname}`;
+                    
+                    if (email.startsWith("svc") || email.startsWith("sa-") || email.startsWith("sa_") || email.includes("service") || email.includes("serviceaccount") ||
+                        username.startsWith("svc") || username.startsWith("sa-") || username.startsWith("sa_") || username.includes("service") || username.includes("serviceaccount") ||
+                        name.includes("service account") || name.includes("svc-")) {
+                        return false;
+                    }
+                    return true;
+                });
+                rawUsers = rawUsers.concat(filteredPage);
                 
                 // Get After-Cursor header
                 cursor = usersRes.headers.get("After-Cursor") || null;

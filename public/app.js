@@ -187,14 +187,21 @@ function renderUI() {
         }
     }
 
-    if (currentReport.isDemoMode) {
+    const hasWarnings = currentReport.warnings && currentReport.warnings.length > 0;
+    if (currentReport.isDemoMode || hasWarnings) {
         warnBanner.style.display = "flex";
         // Combine warnings
         warnMsg.innerHTML = currentReport.warnings.map(w => `• ${w}`).join("<br/>");
         
-        statusText.textContent = "Demo Sandbox Mode";
-        statusDot.className = "badge-dot pulse-green";
-        statusDot.style.backgroundColor = "var(--warning)";
+        if (currentReport.isDemoMode) {
+            statusText.textContent = "Demo Sandbox Mode";
+            statusDot.className = "badge-dot pulse-green";
+            statusDot.style.backgroundColor = "var(--warning)";
+        } else {
+            statusText.textContent = "Live Scan Notice";
+            statusDot.className = "badge-dot pulse-green";
+            statusDot.style.backgroundColor = "var(--warning)";
+        }
     } else {
         warnBanner.style.display = "none";
         statusText.textContent = "Live Secure Sync";

@@ -4,3 +4,10 @@ compatibility_date = "2026-08-24"
 
 [assets]
 directory = "./public"
+
+# [GUARDRAIL_DB KV Namespace Caching]
+# Bind a KV namespace in Cloudflare to store the users database cache and bypass subrequests limits.
+# Run: npx wrangler kv:namespace create GUARDRAIL_DB
+# kv_namespaces = [
+#   { binding = "GUARDRAIL_DB", id = "your-kv-namespace-id" }
+# ]

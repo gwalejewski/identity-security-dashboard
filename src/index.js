@@ -175,7 +175,7 @@ const SANDBOX_DATA = {
 // ==========================================================================
 
 // Authenticate and fetch Microsoft Entra ID assets
-async function scanEntraID(env) {
+async function scanEntraID(env, refresh = false) {
     if (!env.ENTRA_TENANT_ID || !env.ENTRA_CLIENT_ID || !env.ENTRA_CLIENT_SECRET) {
         throw new Error("Missing Microsoft Entra ID credentials (ENTRA_TENANT_ID, ENTRA_CLIENT_ID, or ENTRA_CLIENT_SECRET) in secrets.");
     }
@@ -252,99 +252,124 @@ async function scanEntraID(env) {
         };
     });
 
-    // 4. Fetch Users (Reports API for bulk tenant compliance, fallback to Users list)
+    // 4. Fetch Users (From Cloudflare KV Cache or live API depending on refresh flag)
     let users = [];
     let isCapped = false;
-    try {
-        let reportsUrl = "https://graph.microsoft.com/beta/reports/authenticationMethods/userRegistrationDetails";
-        let rawDetails = [];
-        let pageCount = 0;
+    let isCached = false;
+    
+    if (env.GUARDRAIL_DB && !refresh) {
+        try {
+            const cachedUsers = await env.GUARDRAIL_DB.get("entra_users", "json");
+            if (cachedUsers && Array.isArray(cachedUsers) && cachedUsers.length > 0) {
+                users = cachedUsers;
+                isCached = true;
+            }
+        } catch (e) {
+            // Fallback to live scan
+        }
+    }
 
-        while (reportsUrl && pageCount < 15) {
-            const reportsRes = await fetch(reportsUrl, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            if (reportsRes.ok) {
-                const reportsData = await reportsRes.json();
-                const pageDetails = reportsData.value || [];
-                const filteredPage = pageDetails.filter(d => d.userPrincipalName && !d.userPrincipalName.includes("#EXT#"));
-                rawDetails = rawDetails.concat(filteredPage);
+    if (!isCached) {
+        try {
+            let reportsUrl = "https://graph.microsoft.com/beta/reports/authenticationMethods/userRegistrationDetails";
+            let rawDetails = [];
+            let pageCount = 0;
+
+            while (reportsUrl && pageCount < 15) {
+                const reportsRes = await fetch(reportsUrl, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (reportsRes.ok) {
+                    const reportsData = await reportsRes.json();
+                    const pageDetails = reportsData.value || [];
+                    const filteredPage = pageDetails.filter(d => d.userPrincipalName && !d.userPrincipalName.includes("#EXT#"));
+                    rawDetails = rawDetails.concat(filteredPage);
+                    
+                    reportsUrl = reportsData["@odata.nextLink"] || null;
+                    pageCount++;
+                } else {
+                    throw new Error(`Reports API returned status: ${reportsRes.status} on page ${pageCount}`);
+                }
+            }
+
+            if (reportsUrl) {
+                isCapped = true;
+            }
+
+            users = rawDetails.map(d => {
+                const isMfa = d.isMfaRegistered || d.isMfaCapable || false;
+                const mfaRegistered = isMfa ? "Yes" : "No";
+                const severity = isMfa ? "success" : "warning";
+                const findings = isMfa ? "MFA registered and active." : "WARNING: Account has no registered security methods.";
                 
-                reportsUrl = reportsData["@odata.nextLink"] || null;
-                pageCount++;
-            } else {
-                throw new Error(`Reports API returned status: ${reportsRes.status} on page ${pageCount}`);
-            }
-        }
-
-        if (reportsUrl) {
-            isCapped = true;
-        }
-
-        users = rawDetails.map(d => {
-            const isMfa = d.isMfaRegistered || d.isMfaCapable || false;
-            const mfaRegistered = isMfa ? "Yes" : "No";
-            const severity = isMfa ? "success" : "warning";
-            const findings = isMfa ? "MFA registered and active." : "WARNING: Account has no registered security methods.";
-            
-            return {
-                upn: d.userPrincipalName,
-                roles: d.userType === "guest" ? "Guest External User" : "Standard Member",
-                mfaRegistered: mfaRegistered,
-                mfaEnforced: "Checked via CA",
-                appPasswords: "No",
-                findings: findings,
-                severity: severity
-            };
-        });
-    } catch (e) {
-        // Fallback to basic Users API list with pagination support
-        let usersUrl = "https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType";
-        let rawDetails = [];
-        let pageCount = 0;
-
-        while (usersUrl && pageCount < 15) {
-            const usersRes = await fetch(usersUrl, {
-                headers: { 'Authorization': `Bearer ${token}` }
+                return {
+                    upn: d.userPrincipalName,
+                    roles: d.userType === "guest" ? "Guest External User" : "Standard Member",
+                    mfaRegistered: mfaRegistered,
+                    mfaEnforced: "Checked via CA",
+                    appPasswords: "No",
+                    findings: findings,
+                    severity: severity
+                };
             });
-            if (usersRes.ok) {
-                const usersData = await usersRes.json();
-                const pageDetails = usersData.value || [];
-                const filteredPage = pageDetails.filter(u => u.userPrincipalName && !u.userPrincipalName.includes("#EXT#"));
-                rawDetails = rawDetails.concat(filteredPage);
+        } catch (e) {
+            // Fallback to basic Users API list with pagination support
+            let usersUrl = "https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType";
+            let rawDetails = [];
+            let pageCount = 0;
+
+            while (usersUrl && pageCount < 15) {
+                const usersRes = await fetch(usersUrl, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (usersRes.ok) {
+                    const usersData = await usersRes.json();
+                    const pageDetails = usersData.value || [];
+                    const filteredPage = pageDetails.filter(u => u.userPrincipalName && !u.userPrincipalName.includes("#EXT#"));
+                    rawDetails = rawDetails.concat(filteredPage);
+                    
+                    usersUrl = usersData["@odata.nextLink"] || null;
+                    pageCount++;
+                } else {
+                    throw new Error(`Failed to query users list fallback on page ${pageCount}: ${await usersRes.text()}`);
+                }
+            }
+
+            if (usersUrl) {
+                isCapped = true;
+            }
+
+            users = rawDetails.map(u => {
+                let mfaRegistered = "Yes (Assumed)";
+                let severity = "success";
+                let findings = "MFA registered and active (Assumed). Set Reports.Read.All permissions for exact status.";
                 
-                usersUrl = usersData["@odata.nextLink"] || null;
-                pageCount++;
-            } else {
-                throw new Error(`Failed to query users list fallback on page ${pageCount}: ${await usersRes.text()}`);
-            }
+                if (u.userType === "Guest" || u.userPrincipalName.includes("guest") || u.userPrincipalName.includes("contractor")) {
+                    mfaRegistered = "No";
+                    severity = "warning";
+                    findings = "WARNING: Guest accounts are not fully enrolled in tenant-level authentication schemes.";
+                }
+
+                return {
+                    upn: u.userPrincipalName,
+                    roles: u.userType === "Member" ? "Standard Member" : "Guest External User",
+                    mfaRegistered: mfaRegistered,
+                    mfaEnforced: "Checked via CA",
+                    appPasswords: "No",
+                    findings: findings,
+                    severity: severity
+                };
+            });
         }
 
-        if (usersUrl) {
-            isCapped = true;
-        }
-
-        users = rawDetails.map(u => {
-            let mfaRegistered = "Yes (Assumed)";
-            let severity = "success";
-            let findings = "MFA registered and active (Assumed). Set Reports.Read.All permissions for exact status.";
-            
-            if (u.userType === "Guest" || u.userPrincipalName.includes("guest") || u.userPrincipalName.includes("contractor")) {
-                mfaRegistered = "No";
-                severity = "warning";
-                findings = "WARNING: Guest accounts are not fully enrolled in tenant-level authentication schemes.";
+        // Save back to KV Database Cache if enabled
+        if (env.GUARDRAIL_DB && users.length > 0) {
+            try {
+                await env.GUARDRAIL_DB.put("entra_users", JSON.stringify(users));
+            } catch (e) {
+                // Ignore KV write errors
             }
-
-            return {
-                upn: u.userPrincipalName,
-                roles: u.userType === "Member" ? "Standard Member" : "Guest External User",
-                mfaRegistered: mfaRegistered,
-                mfaEnforced: "Checked via CA",
-                appPasswords: "No",
-                findings: findings,
-                severity: severity
-            };
-        });
+        }
     }
 
     const settings = [
@@ -366,18 +391,25 @@ async function scanEntraID(env) {
         }
     ];
 
+    let warningMsg = null;
+    if (isCached) {
+        warningMsg = `Microsoft Entra ID: Loaded ${users.length} users from Cloudflare KV database cache.`;
+    } else if (isCapped) {
+        warningMsg = "Microsoft Entra ID user scan capped at 1,500 users due to Cloudflare subrequest limits. Bind GUARDRAIL_DB KV to cache larger results.";
+    }
+
     return {
         tenant: env.ENTRA_TENANT_ID,
         timestamp: new Date().toISOString(),
         policies,
         users,
         settings,
-        warning: isCapped ? "Microsoft Entra ID user scan capped at 1,500 users due to Cloudflare subrequest limits." : null
+        warning: warningMsg
     };
 }
 
 // Authenticate and fetch OneLogin IDP assets
-async function scanOneLogin(env) {
+async function scanOneLogin(env, refresh = false) {
     if (!env.ONELOGIN_CLIENT_ID || !env.ONELOGIN_CLIENT_SECRET || !env.ONELOGIN_SUBDOMAIN) {
         throw new Error("Missing OneLogin credentials (ONELOGIN_CLIENT_ID, ONELOGIN_CLIENT_SECRET, or ONELOGIN_SUBDOMAIN) in secrets.");
     }
@@ -424,95 +456,128 @@ async function scanOneLogin(env) {
         }
     ];
 
-    // 3. Fetch Users with cursor-based pagination
-    let rawUsers = [];
-    let usersUrl = `https://api.${region}.onelogin.com/api/2/users?limit=100`;
-    let cursor = null;
-    let pageCount = 0;
+    // 3. Fetch Users (From Cloudflare KV Cache or live API depending on refresh flag)
+    let users = [];
     let isCapped = false;
+    let isCached = false;
 
-    while (usersUrl && pageCount < 15) {
-        const fetchUrl = cursor ? `${usersUrl}&cursor=${cursor}` : usersUrl;
-        const usersRes = await fetch(fetchUrl, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-
-        if (usersRes.ok) {
-            const pageUsers = await usersRes.json();
-            rawUsers = rawUsers.concat(pageUsers);
-            
-            // Get After-Cursor header
-            cursor = usersRes.headers.get("After-Cursor") || null;
-            if (!cursor || pageUsers.length === 0) {
-                break;
-            }
-            pageCount++;
-        } else {
-            throw new Error(`OneLogin users query failed on page ${pageCount}: ${await usersRes.text()}`);
-        }
-    }
-
-    if (cursor) {
-        isCapped = true;
-    }
-
-    // Query OneLogin registered OTP devices ONLY for the first 5 administrators to stay within subrequest limits
-    const olAdmins = rawUsers.filter(u => {
-        const usernameLower = (u.username || u.email || "").toLowerCase();
-        return usernameLower.includes("admin") || usernameLower.includes("super") || u.role_id === 1;
-    });
-    const olUsersToQuery = olAdmins.length > 0 ? olAdmins.slice(0, 5) : rawUsers.slice(0, 5);
-
-    const olPromises = olUsersToQuery.map(async (u) => {
+    if (env.GUARDRAIL_DB && !refresh) {
         try {
-            const devUrl = `https://api.${region}.onelogin.com/api/1/users/${u.id}/otp_devices`;
-            const devRes = await fetch(devUrl, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            if (devRes.ok) {
-                u.otp_devices = await devRes.json();
-            } else {
-                u.otp_devices = [];
+            const cachedUsers = await env.GUARDRAIL_DB.get("onelogin_users", "json");
+            if (cachedUsers && Array.isArray(cachedUsers) && cachedUsers.length > 0) {
+                users = cachedUsers;
+                isCached = true;
             }
         } catch (e) {
-            u.otp_devices = [];
+            // Fallback to live scan
         }
-    });
-    await Promise.all(olPromises);
+    }
 
-    const users = rawUsers.map(u => {
-        const hasMfa = u.otp_devices && u.otp_devices.length > 0;
-        let mfaDevicesVal = "None Enrolled";
-        let bypassRiskVal = "CRITICAL: MFA required but user has not completed device enrollment.";
-        let severityVal = "critical";
+    if (!isCached) {
+        let rawUsers = [];
+        let usersUrl = `https://api.${region}.onelogin.com/api/2/users?limit=100`;
+        let cursor = null;
+        let pageCount = 0;
 
-        if (hasMfa) {
-            mfaDevicesVal = `${u.otp_devices.length} Registered Device(s)`;
-            bypassRiskVal = "Low Risk: User profile has enrolled authentication factors.";
-            severityVal = "success";
-        } else if (u.otp_devices === undefined) {
-            // Beyond parallel limit
-            mfaDevicesVal = "Unchecked (Limit)";
-            bypassRiskVal = "Audit limit reached. Check user manually.";
-            severityVal = "warning";
+        while (usersUrl && pageCount < 15) {
+            const fetchUrl = cursor ? `${usersUrl}&cursor=${cursor}` : usersUrl;
+            const usersRes = await fetch(fetchUrl, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+
+            if (usersRes.ok) {
+                const pageUsers = await usersRes.json();
+                rawUsers = rawUsers.concat(pageUsers);
+                
+                // Get After-Cursor header
+                cursor = usersRes.headers.get("After-Cursor") || null;
+                if (!cursor || pageUsers.length === 0) {
+                    break;
+                }
+                pageCount++;
+            } else {
+                throw new Error(`OneLogin users query failed on page ${pageCount}: ${await usersRes.text()}`);
+            }
         }
 
-        return {
-            username: u.username || u.email,
-            status: u.status === 1 ? "Active" : "Suspended",
-            policy: "Default Policy",
-            mfaDevices: mfaDevicesVal,
-            bypassRisk: bypassRiskVal,
-            severity: severityVal
-        };
-    });
+        if (cursor) {
+            isCapped = true;
+        }
+
+        // Query OneLogin registered OTP devices ONLY for the first 5 administrators to stay within subrequest limits
+        const olAdmins = rawUsers.filter(u => {
+            const usernameLower = (u.username || u.email || "").toLowerCase();
+            return usernameLower.includes("admin") || usernameLower.includes("super") || u.role_id === 1;
+        });
+        const olUsersToQuery = olAdmins.length > 0 ? olAdmins.slice(0, 5) : rawUsers.slice(0, 5);
+
+        const olPromises = olUsersToQuery.map(async (u) => {
+            try {
+                const devUrl = `https://api.${region}.onelogin.com/api/1/users/${u.id}/otp_devices`;
+                const devRes = await fetch(devUrl, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (devRes.ok) {
+                    u.otp_devices = await devRes.json();
+                } else {
+                    u.otp_devices = [];
+                }
+            } catch (e) {
+                u.otp_devices = [];
+            }
+        });
+        await Promise.all(olPromises);
+
+        users = rawUsers.map(u => {
+            const hasMfa = u.otp_devices && u.otp_devices.length > 0;
+            let mfaDevicesVal = "None Enrolled";
+            let bypassRiskVal = "CRITICAL: MFA required but user has not completed device enrollment.";
+            let severityVal = "critical";
+
+            if (hasMfa) {
+                mfaDevicesVal = `${u.otp_devices.length} Registered Device(s)`;
+                bypassRiskVal = "Low Risk: User profile has enrolled authentication factors.";
+                severityVal = "success";
+            } else if (u.otp_devices === undefined) {
+                // Beyond parallel limit
+                mfaDevicesVal = "Unchecked (Limit)";
+                bypassRiskVal = "Audit limit reached. Check user manually.";
+                severityVal = "warning";
+            }
+
+            return {
+                username: u.username || u.email,
+                status: u.status === 1 ? "Active" : "Suspended",
+                policy: "Default Policy",
+                mfaDevices: mfaDevicesVal,
+                bypassRisk: bypassRiskVal,
+                severity: severityVal
+            };
+        });
+
+        // Save back to KV Database Cache if enabled
+        if (env.GUARDRAIL_DB && users.length > 0) {
+            try {
+                await env.GUARDRAIL_DB.put("onelogin_users", JSON.stringify(users));
+            } catch (e) {
+                // Ignore KV write errors
+            }
+        }
+    }
+
+    let warningMsg = null;
+    if (isCached) {
+        warningMsg = `OneLogin: Loaded ${users.length} users from Cloudflare KV database cache.`;
+    } else if (isCapped) {
+        warningMsg = "OneLogin user scan capped at 1,500 users due to Cloudflare subrequest limits. Bind GUARDRAIL_DB KV to cache larger results.";
+    }
 
     return {
         subdomain: env.ONELOGIN_SUBDOMAIN,
         timestamp: new Date().toISOString(),
         policies,
         users,
-        warning: isCapped ? "OneLogin user scan capped at 1,500 users due to Cloudflare subrequest limits." : null
+        warning: warningMsg
     };
 }
 
@@ -721,6 +786,7 @@ export default {
 
         // Endpoint for scanning configurations
         if (url.pathname === "/api/scan") {
+            const refresh = url.searchParams.get("refresh") === "true";
             let scanOutput = {
                 entra: null,
                 onelogin: null,
@@ -731,7 +797,7 @@ export default {
 
             // 1. Audit Entra ID (Catch and fallback to sandbox)
             try {
-                scanOutput.entra = await scanEntraID(env);
+                scanOutput.entra = await scanEntraID(env, refresh);
                 if (scanOutput.entra && scanOutput.entra.warning) {
                     scanOutput.warnings.push(scanOutput.entra.warning);
                 }
@@ -743,7 +809,7 @@ export default {
 
             // 2. Audit OneLogin (Catch and fallback to sandbox)
             try {
-                scanOutput.onelogin = await scanOneLogin(env);
+                scanOutput.onelogin = await scanOneLogin(env, refresh);
                 if (scanOutput.onelogin && scanOutput.onelogin.warning) {
                     scanOutput.warnings.push(scanOutput.onelogin.warning);
                 }

@@ -127,9 +127,10 @@ const REMEDIATION_STEPS = {
 // ==========================================================================
 // FETCH COMPLIANCE REPORT FROM WORKER BACKEND
 // ==========================================================================
-async function fetchScanReport() {
+async function fetchScanReport(forceRefresh = false) {
     try {
-        const response = await fetch("/api/scan");
+        const url = forceRefresh ? "/api/scan?refresh=true" : "/api/scan";
+        const response = await fetch(url);
         if (!response.ok) {
             throw new Error(`Server returned status code: ${response.status}`);
         }
@@ -697,7 +698,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         btn.disabled = true;
         btn.querySelector("span").textContent = "Scanning...";
         
-        const freshReport = await fetchScanReport();
+        const freshReport = await fetchScanReport(true);
         if (freshReport) {
             renderUI();
             showToast("Edge Worker audit complete!", "success");

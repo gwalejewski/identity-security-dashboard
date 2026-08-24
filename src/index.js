@@ -906,13 +906,20 @@ function runSecurityScanRules(entraData, oneloginData) {
                     metrics.score -= 5;
                 }
 
-                if (policy.users && (policy.users.includes("Excludes:") || policy.users.includes("Excludes"))) {
+                const hasExclusions = policy.users && (policy.users.includes("Excludes:") || policy.users.includes("Excludes"));
+                const isActiveMfaOrBlock = policy.state === 'enabled' && (
+                    policy.controls.toLowerCase().includes("mfa") || 
+                    policy.controls.toLowerCase().includes("block") || 
+                    policy.displayName.toLowerCase().includes("mfa")
+                );
+
+                if (hasExclusions && isActiveMfaOrBlock) {
                     violations.push({
                         id: policy.id,
                         title: `MFA Policy Exclusion Group: ${policy.displayName}`,
                         platform: "Microsoft Entra ID",
                         scope: "Excluded Groups/Users",
-                        threat: `Exclusions allow specific accounts to completely bypass authentication security limits.`,
+                        threat: `Active policy exclusions allow specific accounts to completely bypass MFA or security boundary controls.`,
                         severity: "high"
                     });
                     metrics.exclusionsCount++;

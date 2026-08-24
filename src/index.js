@@ -737,6 +737,58 @@ async function scanEntraID(env, refresh = false) {
     };
 }
 
+// Helper to query OneLogin directly for a specific user's MFA enrollment status
+async function getOneLoginUserMfa(env, email, token = null) {
+    const region = env.ONELOGIN_REGION || "us";
+    
+    // Get token if not provided
+    if (!token) {
+        try {
+            const tokenUrl = `https://api.${region}.onelogin.com/auth/oauth2/v2/token`;
+            const tokenRes = await fetch(tokenUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `client_id:${env.ONELOGIN_CLIENT_ID}, client_secret:${env.ONELOGIN_CLIENT_SECRET}`
+                },
+                body: JSON.stringify({ grant_type: "client_credentials" })
+            });
+            if (tokenRes.ok) {
+                const tokenData = await tokenRes.json();
+                token = tokenData.access_token;
+            } else {
+                return false;
+            }
+        } catch (e) {
+            return false;
+        }
+    }
+    
+    try {
+        const userUrl = `https://api.${region}.onelogin.com/api/2/users?email=${encodeURIComponent(email)}`;
+        const userRes = await fetch(userUrl, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (userRes.ok) {
+            const users = await userRes.json();
+            if (users && users.length > 0) {
+                const user = users[0];
+                const devUrl = `https://api.${region}.onelogin.com/api/1/users/${user.id}/otp_devices`;
+                const devRes = await fetch(devUrl, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (devRes.ok) {
+                    const devices = await devRes.json();
+                    return devices && devices.length > 0;
+                }
+            }
+        }
+    } catch (e) {
+        // Ignore
+    }
+    return false;
+}
+
 // Authenticate and fetch OneLogin IDP assets
 async function scanOneLogin(env, refresh = false) {
     if (!env.ONELOGIN_CLIENT_ID || !env.ONELOGIN_CLIENT_SECRET || !env.ONELOGIN_SUBDOMAIN) {
@@ -1211,13 +1263,54 @@ export default {
                     });
                 }
 
+                // Gather candidates for individual OneLogin verification (federated, missing MFA in Entra, and not matched in bulk OneLogin list)
+                const candidates = scanOutput.entra.users.filter(u => {
+                    if (!u.upn) return false;
+                    const upn = u.upn.toLowerCase();
+                    const isFederated = !unfedSet.has(upn);
+                    return isFederated && u.mfaRegistered === "No" && !oneloginMfaUsers.has(upn);
+                });
+
+                if (candidates.length > 0 && env.ONELOGIN_CLIENT_ID && env.ONELOGIN_CLIENT_SECRET) {
+                    let olToken = null;
+                    try {
+                        const region = env.ONELOGIN_REGION || "us";
+                        const tokenUrl = `https://api.${region}.onelogin.com/auth/oauth2/v2/token`;
+                        const tokenRes = await fetch(tokenUrl, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `client_id:${env.ONELOGIN_CLIENT_ID}, client_secret:${env.ONELOGIN_CLIENT_SECRET}`
+                            },
+                            body: JSON.stringify({ grant_type: "client_credentials" })
+                        });
+                        if (tokenRes.ok) {
+                            const tokenData = await tokenRes.json();
+                            olToken = tokenData.access_token;
+                        }
+                    } catch (e) {}
+
+                    if (olToken) {
+                        const promises = candidates.map(async (u) => {
+                            const upn = u.upn.toLowerCase();
+                            const hasMfaInOL = await getOneLoginUserMfa(env, upn, olToken);
+                            if (hasMfaInOL) {
+                                u.mfaRegistered = "Yes (OneLogin SSO)";
+                                u.findings = "Compliant: MFA managed and enforced via OneLogin federation.";
+                                u.severity = "success";
+                            }
+                        });
+                        await Promise.all(promises);
+                    }
+                }
+
+                // Match against bulk OneLogin list
                 scanOutput.entra.users.forEach(u => {
                     if (u.upn) {
                         const upn = u.upn.toLowerCase();
                         const isFederated = !unfedSet.has(upn);
                         
                         if (isFederated && u.mfaRegistered === "No") {
-                            // If they have MFA in OneLogin, they are compliant via federation
                             if (oneloginMfaUsers.has(upn)) {
                                 u.mfaRegistered = "Yes (OneLogin SSO)";
                                 u.findings = "Compliant: MFA managed and enforced via OneLogin federation.";

@@ -1,1 +1,0 @@
-{"@odata.context":"https://graph.microsoft.com/beta/$metadata#groups(id,displayName)","@odata.count":2,"value":[{"id":"bdf0304f-04ea-4112-8aaf-f33e5cb6b8bc","displayName":"Unfederated"},{"id":"e57ec848-eb68-44b8-bb0d-743a3326bdae","displayName":"Unfederated-Test"}]}

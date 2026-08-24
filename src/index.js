@@ -324,7 +324,7 @@ async function scanEntraID(env, refresh = false) {
         // Query users metadata first to find ADM affiliation codes
         const excludedUPNs = new Set();
         try {
-            let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,onPremisesDistinguishedName,${scsAttrName}`;
+            let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$expand=manager($select=id)`;
             let rawUsers = [];
             let pageCount = 0;
             while (usersUrl && pageCount < 15) {
@@ -342,7 +342,12 @@ async function scanEntraID(env, refresh = false) {
                 if (u.userPrincipalName) {
                     const upn = u.userPrincipalName.toLowerCase();
                     const dn = (u.onPremisesDistinguishedName || "").toLowerCase();
+                    const hasSurname = u.surname && String(u.surname).trim().length > 0;
+                    const hasManager = u.manager && u.manager.id;
+                    
                     if (hasSCSAffiliationCodeADM(u) || 
+                        !hasSurname ||
+                        !hasManager ||
                         dn.includes("service account") || 
                         dn.includes("service-account") || 
                         dn.includes("services accounts") || 
@@ -422,7 +427,7 @@ async function scanEntraID(env, refresh = false) {
                 };
             });
         } catch (e) {
-            let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,onPremisesDistinguishedName,${scsAttrName}`;
+            let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$expand=manager($select=id)`;
             let rawDetails = [];
             let pageCount = 0;
 
@@ -439,9 +444,14 @@ async function scanEntraID(env, refresh = false) {
                         const displayName = (u.displayName || "").toLowerCase();
                         const userType = (u.userType || "").toLowerCase();
                         const dn = (u.onPremisesDistinguishedName || "").toLowerCase();
+                        const hasSurname = u.surname && String(u.surname).trim().length > 0;
+                        const hasManager = u.manager && u.manager.id;
                         
                         // Exclude guest account types
                         if (upn.includes("#ext#") || userType === "guest" || upn.includes("guest") || displayName.includes("guest")) return false;
+                        
+                        // Exclude if missing last name or manager
+                        if (!hasSurname || !hasManager) return false;
                         
                         // Exclude service accounts (including DN OU check)
                         if (upn.startsWith("svc") || upn.startsWith("sa-") || upn.startsWith("sa_") || upn.includes("service") || upn.includes("serviceaccount") || displayName.includes("service account") || displayName.includes("svc-") || 
@@ -634,6 +644,13 @@ async function scanOneLogin(env, refresh = false) {
                     
                     // Exclude guest account types
                     if (email.includes("guest") || username.includes("guest") || name.includes("guest")) {
+                        return false;
+                    }
+
+                    // Exclude if missing last name or manager
+                    const hasLastName = u.lastname && String(u.lastname).trim().length > 0;
+                    const hasManager = (u.manager_user_id !== null && u.manager_user_id !== undefined && u.manager_user_id !== "") || (u.manager_ad_id !== null && u.manager_ad_id !== undefined && u.manager_ad_id !== "");
+                    if (!hasLastName || !hasManager) {
                         return false;
                     }
                     

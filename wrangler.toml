@@ -9,5 +9,5 @@ directory = "./public"
 # Bind a KV namespace in Cloudflare to store the users database cache and bypass subrequests limits.
 # Run: npx wrangler kv namespace create GUARDRAIL_DB
 # kv_namespaces = [
-#   { binding = "GUARDRAIL_DB", id = "your-kv-namespace-id" }
+#   { binding = "GUARDRAIL_DB", id = "9b5c9dcc23b64c848650958cf428fd97" }
 # ]

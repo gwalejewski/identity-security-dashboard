@@ -363,11 +363,12 @@ async function scanEntraID(env, refresh = false) {
         }
 
         // Save back to KV Database Cache if enabled
+        let kvWriteError = null;
         if (env.GUARDRAIL_DB && users.length > 0) {
             try {
                 await env.GUARDRAIL_DB.put("entra_users", JSON.stringify(users));
             } catch (e) {
-                // Ignore KV write errors
+                kvWriteError = e.message;
             }
         }
     }
@@ -392,7 +393,9 @@ async function scanEntraID(env, refresh = false) {
     ];
 
     let warningMsg = null;
-    if (isCached) {
+    if (kvWriteError) {
+        warningMsg = `Entra ID KV Cache Write Error: ${kvWriteError}`;
+    } else if (isCached) {
         warningMsg = `Microsoft Entra ID: Loaded ${users.length} users from Cloudflare KV database cache.`;
     } else if (isCapped) {
         warningMsg = "Microsoft Entra ID user scan capped at 1,500 users due to Cloudflare subrequest limits. Bind GUARDRAIL_DB KV to cache larger results.";
@@ -556,17 +559,20 @@ async function scanOneLogin(env, refresh = false) {
         });
 
         // Save back to KV Database Cache if enabled
+        let kvWriteError = null;
         if (env.GUARDRAIL_DB && users.length > 0) {
             try {
                 await env.GUARDRAIL_DB.put("onelogin_users", JSON.stringify(users));
             } catch (e) {
-                // Ignore KV write errors
+                kvWriteError = e.message;
             }
         }
     }
 
     let warningMsg = null;
-    if (isCached) {
+    if (kvWriteError) {
+        warningMsg = `OneLogin KV Cache Write Error: ${kvWriteError}`;
+    } else if (isCached) {
         warningMsg = `OneLogin: Loaded ${users.length} users from Cloudflare KV database cache.`;
     } else if (isCapped) {
         warningMsg = "OneLogin user scan capped at 1,500 users due to Cloudflare subrequest limits. Bind GUARDRAIL_DB KV to cache larger results.";

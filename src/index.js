@@ -342,7 +342,16 @@ async function scanEntraID(env, refresh = false) {
                 if (u.userPrincipalName) {
                     const upn = u.userPrincipalName.toLowerCase();
                     const dn = (u.onPremisesDistinguishedName || "").toLowerCase();
-                    if (hasSCSAffiliationCodeADM(u) || dn.includes("service account") || dn.includes("service-account") || dn.includes("ou=service")) {
+                    if (hasSCSAffiliationCodeADM(u) || 
+                        dn.includes("service account") || 
+                        dn.includes("service-account") || 
+                        dn.includes("services accounts") || 
+                        dn.includes("services-accounts") || 
+                        dn.includes("ou=service") || 
+                        dn.includes("ou=services") ||
+                        dn.includes("ou=services accounts") ||
+                        dn.includes("ou=service accounts") ||
+                        dn.includes("services")) {
                         excludedUPNs.add(upn);
                     }
                 }
@@ -435,7 +444,10 @@ async function scanEntraID(env, refresh = false) {
                         if (upn.includes("#ext#") || userType === "guest" || upn.includes("guest") || displayName.includes("guest")) return false;
                         
                         // Exclude service accounts (including DN OU check)
-                        if (upn.startsWith("svc") || upn.startsWith("sa-") || upn.startsWith("sa_") || upn.includes("service") || upn.includes("serviceaccount") || displayName.includes("service account") || displayName.includes("svc-") || dn.includes("service account") || dn.includes("service-account") || dn.includes("ou=service")) {
+                        if (upn.startsWith("svc") || upn.startsWith("sa-") || upn.startsWith("sa_") || upn.includes("service") || upn.includes("serviceaccount") || displayName.includes("service account") || displayName.includes("svc-") || 
+                            dn.includes("service account") || dn.includes("service-account") || dn.includes("services accounts") || dn.includes("services-accounts") || 
+                            dn.includes("ou=service") || dn.includes("ou=services") || dn.includes("ou=services accounts") || dn.includes("ou=service accounts") ||
+                            dn.includes("services")) {
                             return false;
                         }
                         

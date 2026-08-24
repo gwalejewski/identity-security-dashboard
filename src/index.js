@@ -170,9 +170,18 @@ const SANDBOX_DATA = {
     }
 };
 
-// ==========================================================================
-// LIVE FETCH & SECURITY SCAN PARSER FUNCTIONS
-// ==========================================================================
+// Helper to inspect user attributes and check if any key matches scsaffiliationcode and contains 'ADM'
+function hasSCSAffiliationCodeADM(u) {
+    for (const key of Object.keys(u)) {
+        if (key.toLowerCase().includes("scsaffiliationcode")) {
+            const val = String(u[key] || "");
+            if (val.toUpperCase().includes("ADM")) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
 // Authenticate and fetch Microsoft Entra ID assets
 async function scanEntraID(env, refresh = false) {
@@ -271,6 +280,35 @@ async function scanEntraID(env, refresh = false) {
     }
 
     if (!isCached) {
+        // Query users metadata first to find ADM affiliation codes
+        const excludedUPNs = new Set();
+        try {
+            let usersUrl = "https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,scsaffiliationcode";
+            let rawUsers = [];
+            let pageCount = 0;
+            while (usersUrl && pageCount < 15) {
+                const res = await fetch(usersUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+                if (res.ok) {
+                    const data = await res.json();
+                    rawUsers = rawUsers.concat(data.value || []);
+                    usersUrl = data["@odata.nextLink"] || null;
+                    pageCount++;
+                } else {
+                    break;
+                }
+            }
+            rawUsers.forEach(u => {
+                if (u.userPrincipalName) {
+                    const upn = u.userPrincipalName.toLowerCase();
+                    if (hasSCSAffiliationCodeADM(u)) {
+                        excludedUPNs.add(upn);
+                    }
+                }
+            });
+        } catch (err) {
+            // Ignore metadata errors
+        }
+
         try {
             let reportsUrl = "https://graph.microsoft.com/beta/reports/authenticationMethods/userRegistrationDetails";
             let rawDetails = [];
@@ -292,6 +330,11 @@ async function scanEntraID(env, refresh = false) {
                         
                         // Exclude service accounts
                         if (upn.startsWith("svc") || upn.startsWith("sa-") || upn.startsWith("sa_") || upn.includes("service") || upn.includes("serviceaccount") || displayName.includes("service account") || displayName.includes("svc-")) {
+                            return false;
+                        }
+                        
+                        // Exclude custom affiliation service accounts
+                        if (excludedUPNs.has(upn)) {
                             return false;
                         }
                         return true;
@@ -327,7 +370,7 @@ async function scanEntraID(env, refresh = false) {
             });
         } catch (e) {
             // Fallback to basic Users API list with pagination support
-            let usersUrl = "https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType";
+            let usersUrl = "https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,scsaffiliationcode";
             let rawDetails = [];
             let pageCount = 0;
 
@@ -347,6 +390,11 @@ async function scanEntraID(env, refresh = false) {
                         
                         // Exclude service accounts
                         if (upn.startsWith("svc") || upn.startsWith("sa-") || upn.startsWith("sa_") || upn.includes("service") || upn.includes("serviceaccount") || displayName.includes("service account") || displayName.includes("svc-")) {
+                            return false;
+                        }
+                        
+                        // Exclude custom affiliation service accounts
+                        if (hasSCSAffiliationCodeADM(u)) {
                             return false;
                         }
                         return true;

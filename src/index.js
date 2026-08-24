@@ -170,6 +170,13 @@ const SANDBOX_DATA = {
     }
 };
 
+// Helper to check if a surname is empty or a common placeholder
+function isDummySurname(surname) {
+    if (!surname) return true;
+    const s = String(surname).trim().toLowerCase();
+    return s.length === 0 || s === "." || s === "-" || s === "n/a" || s === "null" || s === "undefined";
+}
+
 // Helper to inspect user attributes and check if any key matches scsaffiliationcode and contains 'ADM'
 function hasSCSAffiliationCodeADM(u) {
     for (const key of Object.keys(u)) {
@@ -383,7 +390,7 @@ async function scanEntraID(env, refresh = false) {
                 if (u.userPrincipalName) {
                     const upn = u.userPrincipalName.toLowerCase();
                     const dn = (u.onPremisesDistinguishedName || "").toLowerCase();
-                    const hasSurname = u.surname && String(u.surname).trim().length > 0;
+                    const hasSurname = u.surname && !isDummySurname(u.surname);
                     // Evaluate manager status depending on whether we succeeded in expanding it
                     const hasManager = u.manager ? !!u.manager.id || Object.keys(u.manager).length > 0 : false;
                     
@@ -532,7 +539,7 @@ async function scanEntraID(env, refresh = false) {
                     const displayName = (u.displayName || "").toLowerCase();
                     const userType = (u.userType || "").toLowerCase();
                     const dn = (u.onPremisesDistinguishedName || "").toLowerCase();
-                    const hasSurname = u.surname && String(u.surname).trim().length > 0;
+                    const hasSurname = u.surname && !isDummySurname(u.surname);
                     const hasManager = u.manager ? !!u.manager.id || Object.keys(u.manager).length > 0 : false;
                     
                     // Exclude guest account types
@@ -621,6 +628,21 @@ async function scanEntraID(env, refresh = false) {
         } else if (metadataWarning) {
             warningMsg = `Microsoft Entra ID Scan Notice: ${metadataWarning}`;
         }
+    }
+
+    // Diagnostic check for hr.profil1
+    const foundUser = users.find(u => u.upn && u.upn.toLowerCase().includes("hr.profil1"));
+    if (foundUser) {
+        let rawInfo = "Not found in rawUsers (maybe metadata query failed entirely)";
+        if (typeof rawUsers !== 'undefined' && Array.isArray(rawUsers) && rawUsers.length > 0) {
+            const match = rawUsers.find(u => u.userPrincipalName && u.userPrincipalName.toLowerCase().includes("hr.profil1"));
+            if (match) {
+                rawInfo = `rawUsers match: surname='${match.surname}', manager=${match.manager ? JSON.stringify(match.manager) : 'null'}, dn='${match.onPremisesDistinguishedName || ''}'`;
+            } else {
+                rawInfo = `Not found in rawUsers (out of pagination range or filtered from rawUsers)`;
+            }
+        }
+        warningMsg = `DIAGNOSTIC: hr.profil1 is still present. Status: ${JSON.stringify(foundUser)}. Raw: ${rawInfo}. ${warningMsg || ''}`;
     }
 
     return {

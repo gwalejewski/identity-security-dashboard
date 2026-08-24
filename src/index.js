@@ -326,7 +326,7 @@ async function scanEntraID(env, refresh = false) {
         const excludedUPNs = new Set();
         let rawUsers = [];
         try {
-            let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$expand=manager($select=id)`;
+            let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$expand=manager($select=id)&$top=999`;
             let pageCount = 0;
             while (usersUrl && pageCount < 15) {
                 const res = await fetch(usersUrl, { headers: { 'Authorization': `Bearer ${token}` } });
@@ -341,7 +341,7 @@ async function scanEntraID(env, refresh = false) {
             }
         } catch (err) {
             try {
-                let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$expand=manager`;
+                let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$expand=manager&$top=999`;
                 let pageCount = 0;
                 rawUsers = [];
                 while (usersUrl && pageCount < 15) {
@@ -357,7 +357,7 @@ async function scanEntraID(env, refresh = false) {
                 }
             } catch (err2) {
                 try {
-                    let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}`;
+                    let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$top=999`;
                     let pageCount = 0;
                     rawUsers = [];
                     while (usersUrl && pageCount < 15) {
@@ -410,7 +410,7 @@ async function scanEntraID(env, refresh = false) {
         }
 
         try {
-            let reportsUrl = "https://graph.microsoft.com/beta/reports/authenticationMethods/userRegistrationDetails";
+            let reportsUrl = "https://graph.microsoft.com/beta/reports/authenticationMethods/userRegistrationDetails?$top=999";
             let rawDetails = [];
             let pageCount = 0;
 
@@ -474,7 +474,7 @@ async function scanEntraID(env, refresh = false) {
             let rawDetails = [];
             let pageCount = 0;
             try {
-                let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$expand=manager($select=id)`;
+                let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$expand=manager($select=id)&$top=999`;
                 while (usersUrl && pageCount < 15) {
                     const usersRes = await fetch(usersUrl, { headers: { 'Authorization': `Bearer ${token}` } });
                     if (usersRes.ok) {
@@ -488,7 +488,7 @@ async function scanEntraID(env, refresh = false) {
                 }
             } catch (err) {
                 try {
-                    let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$expand=manager`;
+                    let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$expand=manager&$top=999`;
                     rawDetails = [];
                     pageCount = 0;
                     while (usersUrl && pageCount < 15) {
@@ -504,7 +504,7 @@ async function scanEntraID(env, refresh = false) {
                     }
                 } catch (err2) {
                     try {
-                        let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}`;
+                        let usersUrl = `https://graph.microsoft.com/beta/users?$select=id,userPrincipalName,displayName,userType,surname,onPremisesDistinguishedName,${scsAttrName}&$top=999`;
                         rawDetails = [];
                         pageCount = 0;
                         while (usersUrl && pageCount < 15) {
